@@ -52,7 +52,6 @@ async def handle_message(bot: Robot, message: Message):
     if not message.text:
         return
     
-    # پیدا کردن لینک در پیام
     words = message.text.split()
     url = None
     for word in words:
@@ -61,18 +60,16 @@ async def handle_message(bot: Robot, message: Message):
             break
     
     if not url:
-        await message.reply("❌ لینکی پیدا نشد! لطفاً یه لینک معتبر بفرستید.")
+        await message.reply("❌ لینکی پیدا نشد!")
         return
     
     await message.reply("⏳ در حال دانلود فایل...")
     
     try:
-        # تشخیص نوع فایل
         response = requests.head(url, timeout=10, allow_redirects=True)
         content_type = response.headers.get('content-type', '')
         file_type = get_file_type(content_type, url)
         
-        # ساخت اسم فایل
         filename = os.path.basename(urlparse(url).path) or 'file'
         if not os.path.splitext(filename)[1]:
             ext = mimetypes.guess_extension(content_type.split(';')[0]) or ''
@@ -83,16 +80,16 @@ async def handle_message(bot: Robot, message: Message):
         await message.reply(f"📥 دانلود: {filename}")
         download_file(url, output_path)
         
-        # ارسال بر اساس نوع
+        # ارسال با متدهای reply_* 
         with open(output_path, 'rb') as f:
             if file_type == 'audio':
-                await bot.send_voice(chat_id=message.chat_id, voice=f, caption=filename)
+                await message.reply_music(music=f, caption=filename)
             elif file_type == 'image':
-                await bot.send_photo(chat_id=message.chat_id, photo=f, caption=filename)
+                await message.reply_image(image=f, caption=filename)
             elif file_type == 'video':
-                await bot.send_video(chat_id=message.chat_id, video=f, caption=filename)
+                await message.reply_video(video=f, caption=filename)
             else:
-                await bot.send_document(chat_id=message.chat_id, document=f, caption=filename)
+                await message.reply_document(document=f, caption=filename)
         
         os.remove(output_path)
         await message.reply("✅ ارسال شد!")
@@ -102,5 +99,4 @@ async def handle_message(bot: Robot, message: Message):
 
 if __name__ == "__main__":
     print("🤖 ربات دانلودر روشن شد...")
-    print("⏳ منتظر دریافت پیام...")
     bot.run()
