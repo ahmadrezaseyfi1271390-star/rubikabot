@@ -1,4 +1,4 @@
-rubka
+rubpy
 requests
 gdown
 pillow
