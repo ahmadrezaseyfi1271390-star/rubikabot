@@ -1,442 +1,110 @@
 import os
 import re
 import json
-import uuid
 import asyncio
-import inspect
+import hashlib
 import requests
-import gdown
-
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
+from mutagen.id3 import ID3, TIT2, TPE1, APIC
+from mutagen.mp3 import MP3
 
 from rubka import Robot, Message
-from rubka.keypad import ChatKeypadBuilder
-from rubka.keypad import InlineBuilder
-
-from mutagen.id3 import ID3, TIT2, TPE1, APIC
+from rubka.builders import ChatKeypadBuilder, InlineBuilder
 
 
 # =========================================================
-# SETTINGS
+# تنظیمات
 # =========================================================
 
 TOKEN = "CEAAAB0RWZIWOUPRPFBKFTVBCQDUFDUDWVFDDITXAVUWMJKFVLJITFGUBBVEPCHH"
 
 DEFAULT_CAPTION = "@Black_list_remix"
 
-MAX_FILE_SIZE = 100 * 1024 * 1024
-MAX_COVER_SIZE = 10 * 1024 * 1024
+MAX_AUDIO_SIZE = 100 * 1024 * 1024       # 100MB
+MAX_COVER_SIZE = 10 * 1024 * 1024        # 10MB
 
-DOWNLOAD_FOLDER = "downloads"
+CACHE_FILE = "cache.json"
 USERS_FILE = "users.json"
-
-
-# =========================================================
-# BOT
-# =========================================================
 
 bot = Robot(
     token=TOKEN,
     safeSendMode=True
 )
 
-
-# =========================================================
-# FOLDER
-# =========================================================
-
-os.makedirs(
-    DOWNLOAD_FOLDER,
-    exist_ok=True
-)
-
-
-# =========================================================
-# USER DATA
-# =========================================================
+executor = ThreadPoolExecutor(max_workers=4)
 
 user_data = {}
-
-# آخرین پیام راهنمای ربات برای هر کاربر
 prompt_messages = {}
 
+users_cache = set()
+
 
 # =========================================================
-# USERS
+# فایل‌های JSON
 # =========================================================
 
-def load_users():
-
-    if not os.path.exists(USERS_FILE):
-        return []
-
+def load_json(filename, default):
     try:
+        if not os.path.exists(filename):
+            return default
 
-        with open(
-            USERS_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-            data = json.load(f)
+    except Exception:
+        return default
 
-            if isinstance(data, list):
-                return data
 
-    except Exception as e:
+def save_json(filename, data):
+    temp = filename + ".tmp"
 
-        print(
-            "USERS LOAD ERROR:",
-            repr(e)
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False,
+            indent=2
         )
 
-    return []
+    os.replace(temp, filename)
 
 
-def save_user(chat_id):
+cache = load_json(CACHE_FILE, {})
+users_cache = set(load_json(USERS_FILE, []))
 
+
+def register_user(chat_id):
     chat_id = str(chat_id)
 
-    users = load_users()
-
-    users = [
-        str(x)
-        for x in users
-    ]
-
-    if chat_id not in users:
-
-        users.append(
-            chat_id
+    if chat_id not in users_cache:
+        users_cache.add(chat_id)
+        save_json(
+            USERS_FILE,
+            list(users_cache)
         )
 
-        try:
-
-            with open(
-                USERS_FILE,
-                "w",
-                encoding="utf-8"
-            ) as f:
-
-                json.dump(
-                    users,
-                    f,
-                    ensure_ascii=False,
-                    indent=2
-                )
-
-        except Exception as e:
-
-            print(
-                "USERS SAVE ERROR:",
-                repr(e)
-            )
-
 
 # =========================================================
-# ASYNC
+# اجرای کارهای سنگین خارج از Event Loop
 # =========================================================
 
-async def maybe_await(result):
-
-    if inspect.isawaitable(result):
-        return await result
-
-    return result
-
-
-async def run_blocking(
-    function,
-    *args
-):
-
+async def run_blocking(func, *args):
     loop = asyncio.get_running_loop()
 
     return await loop.run_in_executor(
-        None,
-        lambda: function(*args)
+        executor,
+        lambda: func(*args)
     )
 
 
 # =========================================================
-# MESSAGE ID
-# =========================================================
-
-def get_message_id(result):
-
-    if result is None:
-        return None
-
-    for attr in (
-        "message_id",
-        "id"
-    ):
-
-        value = getattr(
-            result,
-            attr,
-            None
-        )
-
-        if value:
-            return str(value)
-
-    if isinstance(
-        result,
-        dict
-    ):
-
-        for key in (
-            "message_id",
-            "id"
-        ):
-
-            if key in result:
-                return str(
-                    result[key]
-                )
-
-    return None
-
-
-# =========================================================
-# DELETE OLD BOT PROMPT
-# =========================================================
-
-async def delete_old_prompt(
-    chat_id
-):
-
-    chat_id = str(chat_id)
-
-    old_id = prompt_messages.get(
-        chat_id
-    )
-
-    if not old_id:
-        return
-
-    try:
-
-        result = bot.delete_message(
-            chat_id=chat_id,
-            message_id=str(old_id)
-        )
-
-        await maybe_await(
-            result
-        )
-
-    except Exception as e:
-
-        print(
-            "DELETE OLD PROMPT:",
-            repr(e)
-        )
-
-    prompt_messages.pop(
-        chat_id,
-        None
-    )
-
-
-# =========================================================
-# SEND SHORT PROMPT
-# =========================================================
-
-async def prompt(
-    chat_id,
-    text,
-    chat_keypad=None,
-    inline_keypad=None
-):
-
-    chat_id = str(chat_id)
-
-    await delete_old_prompt(
-        chat_id
-    )
-
-    try:
-
-        result = bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            chat_keypad=chat_keypad,
-            inline_keypad=inline_keypad
-        )
-
-        result = await maybe_await(
-            result
-        )
-
-        message_id = get_message_id(
-            result
-        )
-
-        if message_id:
-
-            prompt_messages[
-                chat_id
-            ] = message_id
-
-        return result
-
-    except Exception as e:
-
-        print(
-            "PROMPT ERROR:",
-            repr(e)
-        )
-
-        return None
-
-
-# =========================================================
-# MAIN KEYBOARD
-# =========================================================
-
-def main_keyboard():
-
-    builder = ChatKeypadBuilder()
-
-    return (
-        builder
-        .row(
-            builder.button(
-                id="banner",
-                text="🖼 ساخت بنر"
-            )
-        )
-        .row(
-            builder.button(
-                id="music_edit",
-                text="🎵 ادیت آهنگ"
-            )
-        )
-        .build(
-            resize_keyboard=True,
-            on_time_keyboard=False
-        )
-    )
-
-
-# =========================================================
-# TYPE KEYBOARD
-# =========================================================
-
-def type_keyboard():
-
-    builder = ChatKeypadBuilder()
-
-    return (
-        builder
-        .row(
-            builder.button(
-                id="music",
-                text="🎵 آهنگ"
-            ),
-            builder.button(
-                id="voice",
-                text="🎤 ویس"
-            )
-        )
-        .build(
-            resize_keyboard=True,
-            on_time_keyboard=False
-        )
-    )
-
-
-# =========================================================
-# YES / NO KEYBOARD
-# =========================================================
-
-def yes_no_keyboard():
-
-    builder = ChatKeypadBuilder()
-
-    return (
-        builder
-        .row(
-            builder.button(
-                id="yes",
-                text="بله"
-            ),
-            builder.button(
-                id="no",
-                text="نه"
-            )
-        )
-        .build(
-            resize_keyboard=True,
-            on_time_keyboard=False
-        )
-    )
-
-
-# =========================================================
-# NEXT KEYBOARD
-# =========================================================
-
-def next_keyboard():
-
-    builder = ChatKeypadBuilder()
-
-    return (
-        builder
-        .row(
-            builder.button(
-                id="next",
-                text="بعدی"
-            )
-        )
-        .build(
-            resize_keyboard=True,
-            on_time_keyboard=False
-        )
-    )
-
-
-# =========================================================
-# GLASS BUTTON
-# =========================================================
-
-def make_glass_button(
-    text
-):
-
-    if not text:
-        return None
-
-    try:
-
-        builder = InlineBuilder()
-
-        builder.button(
-            id="display_button",
-            text=text
-        )
-
-        return builder.build()
-
-    except Exception as e:
-
-        print(
-            "GLASS BUTTON ERROR:",
-            repr(e)
-        )
-
-        return None
-
-
-# =========================================================
-# URL
+# استخراج لینک
 # =========================================================
 
 def extract_url(text):
-
     if not text:
         return None
 
@@ -448,71 +116,33 @@ def extract_url(text):
     if not match:
         return None
 
-    return (
-        match.group(0)
-        .strip()
-        .rstrip("،,؛;)")
+    return match.group(0).rstrip(
+        ".,!?،؛)]}"
     )
 
 
 # =========================================================
-# DOWNLOAD AUDIO
+# دانلود فایل
 # =========================================================
 
-def download_audio(
-    url
-):
-
-    path = os.path.join(
-        DOWNLOAD_FOLDER,
-        "audio_" +
-        uuid.uuid4().hex +
-        ".mp3"
-    )
-
+def download_url(url, output, max_size):
     try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-        print(
-            "DOWNLOAD AUDIO:",
-            url
-        )
-
-        # ---------------------------------------------
-        # GOOGLE DRIVE
-        # ---------------------------------------------
-
-        if "drive.google.com" in url:
-
-            gdown.download(
-                url,
-                path,
-                quiet=True
-            )
-
-        # ---------------------------------------------
-        # NORMAL URL
-        # ---------------------------------------------
-
-        else:
-
-            response = requests.get(
-                url,
-                stream=True,
-                timeout=60,
-                headers={
-                    "User-Agent":
-                    "Mozilla/5.0"
-                }
-            )
+        with requests.get(
+            url,
+            headers=headers,
+            stream=True,
+            timeout=60
+        ) as response:
 
             response.raise_for_status()
 
             total = 0
 
-            with open(
-                path,
-                "wb"
-            ) as f:
+            with open(output, "wb") as f:
 
                 for chunk in response.iter_content(
                     chunk_size=1024 * 1024
@@ -523,228 +153,124 @@ def download_audio(
 
                     total += len(chunk)
 
-                    if total > MAX_FILE_SIZE:
+                    if total > max_size:
+                        try:
+                            os.remove(output)
+                        except:
+                            pass
 
-                        raise Exception(
-                            "FILE_TOO_LARGE"
-                        )
+                        return False
 
                     f.write(chunk)
 
-        if not os.path.exists(
-            path
-        ):
+        return os.path.exists(output)
 
-            raise Exception(
-                "DOWNLOAD_FAILED"
-            )
+    except Exception as e:
+        print("DOWNLOAD ERROR:", e)
 
-        size = os.path.getsize(
-            path
-        )
+        try:
+            os.remove(output)
+        except:
+            pass
 
-        if size <= 0:
-
-            raise Exception(
-                "EMPTY_FILE"
-            )
-
-        if size > MAX_FILE_SIZE:
-
-            raise Exception(
-                "FILE_TOO_LARGE"
-            )
-
-        return path
-
-    except Exception:
-
-        if os.path.exists(
-            path
-        ):
-
-            try:
-                os.remove(path)
-            except:
-                pass
-
-        raise
+        return False
 
 
-# =========================================================
-# DOWNLOAD COVER
-# =========================================================
-
-def download_cover(
-    url
-):
-
-    path = os.path.join(
-        DOWNLOAD_FOLDER,
-        "cover_" +
-        uuid.uuid4().hex +
-        ".jpg"
+def download_audio(url, output):
+    return download_url(
+        url,
+        output,
+        MAX_AUDIO_SIZE
     )
+
+
+def download_image(url, output):
+    return download_url(
+        url,
+        output,
+        MAX_COVER_SIZE
+    )
+
+
+# =========================================================
+# تبدیل کاور به JPG
+# =========================================================
+
+def convert_to_jpg(input_file, output_file):
 
     try:
 
-        response = requests.get(
-            url,
-            timeout=30,
-            headers={
-                "User-Agent":
-                "Mozilla/5.0"
-            }
-        )
+        with Image.open(input_file) as img:
 
-        response.raise_for_status()
+            if img.mode in (
+                "RGBA",
+                "LA",
+                "P"
+            ):
+                background = Image.new(
+                    "RGB",
+                    img.size,
+                    "white"
+                )
 
-        data = response.content
+                if img.mode == "P":
+                    img = img.convert("RGBA")
 
-        if len(data) > MAX_COVER_SIZE:
+                background.paste(
+                    img,
+                    mask=img.getchannel("A")
+                    if "A" in img.getbands()
+                    else None
+                )
 
-            raise Exception(
-                "COVER_TOO_LARGE"
+                img = background
+
+            else:
+                img = img.convert("RGB")
+
+            img.save(
+                output_file,
+                "JPEG",
+                quality=92
             )
 
-        image = Image.open(
-            BytesIO(data)
-        )
+        return True
 
-        image.load()
-
-        image = image.convert(
-            "RGB"
-        )
-
-        image.save(
-            path,
-            "JPEG",
-            quality=95
-        )
-
-        image.close()
-
-        return path
-
-    except Exception:
-
-        if os.path.exists(
-            path
-        ):
-
-            try:
-                os.remove(path)
-            except:
-                pass
-
-        raise
+    except Exception as e:
+        print("IMAGE ERROR:", e)
+        return False
 
 
 # =========================================================
-# DOWNLOAD BANNER
-# =========================================================
-
-def download_banner(
-    url
-):
-
-    path = os.path.join(
-        DOWNLOAD_FOLDER,
-        "banner_" +
-        uuid.uuid4().hex +
-        ".jpg"
-    )
-
-    try:
-
-        response = requests.get(
-            url,
-            timeout=60,
-            headers={
-                "User-Agent":
-                "Mozilla/5.0"
-            }
-        )
-
-        response.raise_for_status()
-
-        data = response.content
-
-        if len(data) > MAX_FILE_SIZE:
-
-            raise Exception(
-                "FILE_TOO_LARGE"
-            )
-
-        image = Image.open(
-            BytesIO(data)
-        )
-
-        image.load()
-
-        image = image.convert(
-            "RGB"
-        )
-
-        image.save(
-            path,
-            "JPEG",
-            quality=95
-        )
-
-        image.close()
-
-        return path
-
-    except Exception:
-
-        if os.path.exists(
-            path
-        ):
-
-            try:
-                os.remove(path)
-            except:
-                pass
-
-        raise
-
-
-# =========================================================
-# MP3 METADATA
+# ویرایش MP3
 # =========================================================
 
 def edit_mp3(
-    file_path,
+    input_file,
+    output_file,
     title,
     artist,
-    cover_path
+    cover_file=None
 ):
 
     try:
 
+        audio = MP3(input_file)
+
         try:
-
-            tags = ID3(
-                file_path
-            )
-
+            audio.add_tags()
         except:
+            pass
 
-            tags = ID3()
+        tags = audio.tags
 
-        tags.delall(
-            "TIT2"
-        )
+        if tags is None:
+            audio.add_tags()
+            tags = audio.tags
 
-        tags.delall(
-            "TPE1"
-        )
-
-        tags.delall(
-            "APIC"
-        )
+        tags.delall("TIT2")
+        tags.delall("TPE1")
+        tags.delall("APIC")
 
         tags.add(
             TIT2(
@@ -760,15 +286,10 @@ def edit_mp3(
             )
         )
 
-        if (
-            cover_path
-            and os.path.exists(
-                cover_path
-            )
-        ):
+        if cover_file and os.path.exists(cover_file):
 
             with open(
-                cover_path,
+                cover_file,
                 "rb"
             ) as f:
 
@@ -784,520 +305,498 @@ def edit_mp3(
                 )
             )
 
-        tags.save(
-            file_path
+        audio.save()
+
+        os.replace(
+            input_file,
+            output_file
         )
+
+        return True
 
     except Exception as e:
+        print("MP3 EDIT ERROR:", e)
+        return False
 
-        print(
-            "MP3 EDIT ERROR:",
-            repr(e)
+
+# =========================================================
+# ساخت کلید یکتا برای فایل
+# =========================================================
+
+def make_cache_key(
+    kind,
+    title="",
+    artist="",
+    source=""
+):
+
+    raw = "|".join([
+        str(kind),
+        str(title),
+        str(artist),
+        str(source)
+    ])
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
+
+
+# =========================================================
+# ذخیره مرجع فایل ارسال‌شده
+# =========================================================
+
+def save_cache(
+    key,
+    kind,
+    file_id,
+    caption="",
+    button_text=None
+):
+
+    cache[key] = {
+        "kind": kind,
+        "file_id": file_id,
+        "caption": caption,
+        "button_text": button_text
+    }
+
+    save_json(
+        CACHE_FILE,
+        cache
+    )
+
+
+# =========================================================
+# حذف پیام راهنمای قبلی ربات
+# =========================================================
+
+async def delete_previous_prompt(chat_id):
+
+    chat_id = str(chat_id)
+
+    old_id = prompt_messages.get(chat_id)
+
+    if not old_id:
+        return
+
+    try:
+        await bot.delete_message(
+            chat_id,
+            old_id
+        )
+    except Exception as e:
+        print("DELETE PROMPT:", e)
+
+    prompt_messages.pop(
+        chat_id,
+        None
+    )
+
+
+# =========================================================
+# ارسال راهنما
+# =========================================================
+
+async def prompt(
+    chat_id,
+    text,
+    keypad=None,
+    inline_keypad=None
+):
+
+    chat_id = str(chat_id)
+
+    await delete_previous_prompt(chat_id)
+
+    msg = await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        chat_keypad=keypad,
+        inline_keypad=inline_keypad
+    )
+
+    try:
+        message_id = getattr(
+            msg,
+            "message_id",
+            None
         )
 
-        raise
+        if message_id:
+            prompt_messages[chat_id] = message_id
+
+    except:
+        pass
+
+    return msg
 
 
 # =========================================================
-# RENAME MP3
+# کیبورد اصلی
 # =========================================================
 
-def rename_mp3(
-    file_path,
-    title
-):
+def main_keyboard():
 
-    safe_title = re.sub(
-        r'[\/:*?"<>|]',
-        "_",
-        title
+    builder = ChatKeypadBuilder()
+
+    builder.row(
+        builder.button(
+            id="make_banner",
+            text="🖼 ساخت بنر"
+        ),
+        builder.button(
+            id="edit_music",
+            text="🎵 ادیت آهنگ"
+        )
     )
 
-    safe_title = safe_title.strip()
-
-    if not safe_title:
-        safe_title = "music"
-
-    new_path = os.path.join(
-        DOWNLOAD_FOLDER,
-        safe_title + ".mp3"
+    return builder.build(
+        resize_keyboard=True
     )
 
-    counter = 1
 
-    while os.path.exists(
-        new_path
-    ):
+# =========================================================
+# کیبورد بله / نه
+# =========================================================
 
-        new_path = os.path.join(
-            DOWNLOAD_FOLDER,
-            f"{safe_title}_{counter}.mp3"
+def yes_no_keyboard():
+
+    builder = ChatKeypadBuilder()
+
+    builder.row(
+        builder.button(
+            id="preview_yes",
+            text="بله"
+        ),
+        builder.button(
+            id="preview_no",
+            text="نه"
+        )
+    )
+
+    return builder.build(
+        resize_keyboard=True
+    )
+
+
+# =========================================================
+# کیبورد نوع خروجی
+# =========================================================
+
+def type_keyboard():
+
+    builder = ChatKeypadBuilder()
+
+    builder.row(
+        builder.button(
+            id="song",
+            text="🎵 آهنگ"
+        ),
+        builder.button(
+            id="voice",
+            text="🎤 ویس"
+        )
+    )
+
+    return builder.build(
+        resize_keyboard=True
+    )
+
+
+# =========================================================
+# کیبورد بعدی
+# =========================================================
+
+def next_keyboard():
+
+    builder = ChatKeypadBuilder()
+
+    builder.row(
+        builder.button(
+            id="next",
+            text="بعدی"
+        )
+    )
+
+    return builder.build(
+        resize_keyboard=True
+    )
+
+
+# =========================================================
+# دکمه شیشه‌ای
+# =========================================================
+
+def make_glass_button(text):
+
+    builder = InlineBuilder()
+
+    try:
+
+        builder.button_simple(
+            id="display_button",
+            text=text
         )
 
-        counter += 1
+    except Exception:
 
-    os.rename(
-        file_path,
-        new_path
-    )
+        builder.button(
+            id="display_button",
+            text=text
+        )
 
-    return new_path
-
-
-# =========================================================
-# SEND MUSIC
-# =========================================================
-
-async def send_music_to_user(
-    chat_id,
-    file_path,
-    caption,
-    inline_keypad=None
-):
-
-    result = bot.send_music(
-        chat_id=str(chat_id),
-        path=file_path,
-        text=caption,
-        file_name=os.path.basename(
-            file_path
-        ),
-        inline_keypad=inline_keypad
-    )
-
-    return await maybe_await(
-        result
-    )
+    return builder.build()
 
 
 # =========================================================
-# SEND VOICE
+# ارسال فایل با file_id
 # =========================================================
 
-async def send_voice_to_user(
-    chat_id,
-    file_path,
-    caption,
-    inline_keypad=None
-):
-
-    result = bot.send_voice(
-        chat_id=str(chat_id),
-        path=file_path,
-        text=caption,
-        file_name=os.path.basename(
-            file_path
-        ),
-        inline_keypad=inline_keypad
-    )
-
-    return await maybe_await(
-        result
-    )
-
-
-# =========================================================
-# SEND IMAGE
-# =========================================================
-
-async def send_image_to_user(
-    chat_id,
-    file_path,
-    caption,
-    inline_keypad=None
-):
-
-    result = bot.send_image(
-        chat_id=str(chat_id),
-        path=file_path,
-        text=caption,
-        inline_keypad=inline_keypad
-    )
-
-    return await maybe_await(
-        result
-    )
-
-
-# =========================================================
-# PREVIEW
-# همان کاربری که درخواست داده
-# =========================================================
-
-async def send_preview(
+async def send_cached_file(
     chat_id,
     data
 ):
 
-    file_path = data.get(
-        "file_path"
+    chat_id = str(chat_id)
+
+    kind = data.get("kind")
+    file_id = data.get("file_id")
+    caption = data.get(
+        "caption",
+        ""
     )
 
-    if not file_path:
-        return
-
-    try:
-
-        if data.get(
-            "mode"
-        ) == "music":
-
-            await send_music_to_user(
-                chat_id,
-                file_path,
-                "👀 پیش‌نمایش"
-            )
-
-        elif data.get(
-            "mode"
-        ) == "banner":
-
-            await send_image_to_user(
-                chat_id,
-                file_path,
-                "👀 پیش‌نمایش"
-            )
-
-    except Exception as e:
-
-        print(
-            "PREVIEW ERROR:",
-            repr(e)
-        )
-
-
-# =========================================================
-# FINISH MUSIC
-# =========================================================
-
-async def finish_music(
-    message
-):
-
-    chat_id = str(
-        message.chat_id
+    button_text = data.get(
+        "button_text"
     )
 
-    data = user_data.get(
-        chat_id
-    )
+    inline_keypad = None
 
-    if not data:
-        return
-
-    file_path = data.get(
-        "file_path"
-    )
-
-    cover_path = data.get(
-        "cover_path"
-    )
-
-    try:
-
-        # ---------------------------------------------
-        # EDIT
-        # ---------------------------------------------
-
-        await prompt(
-            chat_id,
-            "🎨"
-        )
-
-        await run_blocking(
-            edit_mp3,
-            file_path,
-            data["title"],
-            data["artist"],
-            cover_path
-        )
-
-        # ---------------------------------------------
-        # RENAME
-        # ---------------------------------------------
-
-        file_path = await run_blocking(
-            rename_mp3,
-            file_path,
-            data["title"]
-        )
-
-        data["file_path"] = file_path
-
-        # ---------------------------------------------
-        # BUTTON
-        # ---------------------------------------------
-
+    if button_text:
         inline_keypad = make_glass_button(
-            data.get(
-                "button_text"
-            )
+            button_text
         )
-
-        # ---------------------------------------------
-        # FINAL
-        # ---------------------------------------------
-
-        await prompt(
-            chat_id,
-            "📤"
-        )
-
-        await send_music_to_user(
-            chat_id,
-            file_path,
-            data["caption"],
-            inline_keypad
-        )
-
-        await prompt(
-            chat_id,
-            "✅",
-            chat_keypad=main_keyboard()
-        )
-
-    except Exception as e:
-
-        print(
-            "FINISH MUSIC ERROR:",
-            repr(e)
-        )
-
-        if "FILE_TOO_LARGE" in str(e):
-
-            await prompt(
-                chat_id,
-                "❌ حجم فایل بیشتر از ۱۰۰MB است.",
-                chat_keypad=main_keyboard()
-            )
-
-        else:
-
-            await prompt(
-                chat_id,
-                "❌",
-                chat_keypad=main_keyboard()
-            )
-
-    finally:
-
-        remove_file(
-            file_path
-        )
-
-        remove_file(
-            cover_path
-        )
-
-        user_data.pop(
-            chat_id,
-            None
-        )
-
-
-# =========================================================
-# FINISH VOICE
-# =========================================================
-
-async def finish_voice(
-    message
-):
-
-    chat_id = str(
-        message.chat_id
-    )
-
-    data = user_data.get(
-        chat_id
-    )
-
-    if not data:
-        return
-
-    file_path = data.get(
-        "file_path"
-    )
 
     try:
 
-        inline_keypad = make_glass_button(
-            data.get(
-                "button_text"
+        if kind == "music":
+
+            return await bot.send_music(
+                chat_id=chat_id,
+                file_id=file_id,
+                text=caption,
+                inline_keypad=inline_keypad
             )
-        )
 
-        await prompt(
-            chat_id,
-            "📤"
-        )
+        if kind == "voice":
 
-        await send_voice_to_user(
-            chat_id,
-            file_path,
-            data["caption"],
-            inline_keypad
-        )
+            return await bot.send_voice(
+                chat_id=chat_id,
+                file_id=file_id,
+                text=caption,
+                inline_keypad=inline_keypad
+            )
 
-        await prompt(
-            chat_id,
-            "✅",
-            chat_keypad=main_keyboard()
-        )
+        if kind == "image":
+
+            return await bot.send_image(
+                chat_id=chat_id,
+                file_id=file_id,
+                text=caption,
+                inline_keypad=inline_keypad
+            )
 
     except Exception as e:
 
-        print(
-            "FINISH VOICE ERROR:",
-            repr(e)
-        )
+        print("CACHE SEND ERROR:", e)
 
-        await prompt(
-            chat_id,
-            "❌",
-            chat_keypad=main_keyboard()
-        )
-
-    finally:
-
-        remove_file(
-            file_path
-        )
-
-        user_data.pop(
-            chat_id,
-            None
-        )
+        return None
 
 
 # =========================================================
-# FINISH BANNER
+# ارسال فایل اولیه و ثبت file_id
 # =========================================================
 
-async def finish_banner(
-    message
+async def send_and_cache_music(
+    chat_id,
+    file_path,
+    caption,
+    button_text,
+    cache_key
 ):
 
-    chat_id = str(
-        message.chat_id
-    )
+    inline_keypad = None
 
-    data = user_data.get(
-        chat_id
-    )
-
-    if not data:
-        return
-
-    file_path = data.get(
-        "file_path"
-    )
-
-    try:
-
+    if button_text:
         inline_keypad = make_glass_button(
-            data.get(
-                "button_text"
-            )
+            button_text
         )
 
-        await prompt(
-            chat_id,
-            "📤"
-        )
+    msg = await bot.send_music(
+        chat_id=str(chat_id),
+        path=file_path,
+        text=caption,
+        inline_keypad=inline_keypad
+    )
 
-        await send_image_to_user(
-            chat_id,
-            file_path,
-            data["caption"],
-            inline_keypad
-        )
+    file_id = getattr(
+        msg,
+        "file_id",
+        None
+    )
 
-        await prompt(
-            chat_id,
-            "✅",
-            chat_keypad=main_keyboard()
-        )
-
-    except Exception as e:
-
-        print(
-            "FINISH BANNER ERROR:",
-            repr(e)
-        )
-
-        await prompt(
-            chat_id,
-            "❌",
-            chat_keypad=main_keyboard()
-        )
-
-    finally:
-
-        remove_file(
-            file_path
-        )
-
-        user_data.pop(
-            chat_id,
-            None
-        )
-
-
-# =========================================================
-# REMOVE FILE
-# =========================================================
-
-def remove_file(
-    path
-):
-
-    if (
-        path
-        and os.path.exists(path)
-    ):
+    if not file_id:
 
         try:
+            file_id = msg.music.file_id
+        except:
+            pass
 
-            os.remove(
-                path
-            )
+    if file_id:
 
-        except Exception as e:
+        save_cache(
+            cache_key,
+            "music",
+            file_id,
+            caption,
+            button_text
+        )
 
-            print(
-                "REMOVE FILE ERROR:",
-                repr(e)
-            )
+    return msg
+
+
+async def send_and_cache_voice(
+    chat_id,
+    file_path,
+    caption,
+    button_text,
+    cache_key
+):
+
+    inline_keypad = None
+
+    if button_text:
+        inline_keypad = make_glass_button(
+            button_text
+        )
+
+    msg = await bot.send_voice(
+        chat_id=str(chat_id),
+        path=file_path,
+        text=caption,
+        inline_keypad=inline_keypad
+    )
+
+    file_id = getattr(
+        msg,
+        "file_id",
+        None
+    )
+
+    if not file_id:
+
+        try:
+            file_id = msg.voice.file_id
+        except:
+            pass
+
+    if file_id:
+
+        save_cache(
+            cache_key,
+            "voice",
+            file_id,
+            caption,
+            button_text
+        )
+
+    return msg
+
+
+async def send_and_cache_image(
+    chat_id,
+    file_path,
+    caption,
+    button_text,
+    cache_key
+):
+
+    inline_keypad = None
+
+    if button_text:
+        inline_keypad = make_glass_button(
+            button_text
+        )
+
+    msg = await bot.send_image(
+        chat_id=str(chat_id),
+        path=file_path,
+        text=caption,
+        inline_keypad=inline_keypad
+    )
+
+    file_id = getattr(
+        msg,
+        "file_id",
+        None
+    )
+
+    if not file_id:
+
+        try:
+            file_id = msg.image.file_id
+        except:
+            pass
+
+    if file_id:
+
+        save_cache(
+            cache_key,
+            "image",
+            file_id,
+            caption,
+            button_text
+        )
+
+    return msg
 
 
 # =========================================================
-# MESSAGE HANDLER
+# /start
 # =========================================================
 
 @bot.on_message()
-async def handle_message(
-    bot,
-    message: Message
-):
+async def handler(message: Message):
 
     try:
 
-        chat_id = str(
-            message.chat_id
+        chat_id = str(message.chat_id)
+        text = (
+            getattr(
+                message,
+                "text",
+                ""
+            )
+            or ""
+        ).strip()
+
+        register_user(chat_id)
+
+        # ---------------------------------------------
+        # آخرین کاربر فعال
+        # ---------------------------------------------
+
+        # این مقدار فقط برای ثبت آخرین تعامل نگه داشته می‌شود.
+        # ارسال واقعی همیشه به chat_id همان درخواست‌کننده است.
+
+        user = user_data.setdefault(
+            chat_id,
+            {}
         )
 
-        save_user(
-            chat_id
-        )
+        user["active"] = True
 
-        text = getattr(
-            message,
-            "text",
-            None
-        )
-
-        if text:
-            text = text.strip()
 
         # =================================================
         # START
@@ -1305,80 +804,118 @@ async def handle_message(
 
         if text == "/start":
 
-            user_data.pop(
-                chat_id,
-                None
-            )
-
-            await prompt(
-                chat_id,
-                "👇",
-                chat_keypad=main_keyboard()
-            )
-
-            return
-
-        data = user_data.get(
-            chat_id
-        )
-
-        # =================================================
-        # MAIN - MUSIC
-        # =================================================
-
-        if text == "🎵 ادیت آهنگ":
-
             user_data[chat_id] = {
-
-                "mode": "music",
-
-                "step": "audio_url",
-
-                "url": None,
-
-                "file_path": None,
-
-                "caption":
-                    DEFAULT_CAPTION,
-
-                "type": None,
-
-                "title": "",
-
-                "artist": "",
-
-                "cover_path": None,
-
-                "button_text": ""
+                "step": "main"
             }
 
             await prompt(
                 chat_id,
-                "🔗"
+                "👇",
+                main_keyboard()
             )
 
             return
 
+
         # =================================================
-        # MAIN - BANNER
+        # باز ارسال
+        # =================================================
+
+        if text in (
+            "باز ارسال",
+            "بازارسال",
+            "ارسال مجدد"
+        ):
+
+            reply = getattr(
+                message,
+                "reply_to_message",
+                None
+            )
+
+            if not reply:
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+                return
+
+            replied_message_id = getattr(
+                reply,
+                "message_id",
+                None
+            )
+
+            if not replied_message_id:
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+                return
+
+            found = None
+
+            # پیام‌های ذخیره‌شده را بررسی می‌کنیم
+            for key, item in cache.items():
+
+                if str(
+                    item.get(
+                        "message_id",
+                        ""
+                    )
+                ) == str(replied_message_id):
+
+                    found = item
+                    break
+
+            if not found:
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+                return
+
+            result = await send_cached_file(
+                chat_id,
+                found
+            )
+
+            if result:
+
+                await prompt(
+                    chat_id,
+                    "✅",
+                    main_keyboard()
+                )
+
+            else:
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+            return
+
+
+        # =================================================
+        # ساخت بنر
         # =================================================
 
         if text == "🖼 ساخت بنر":
 
             user_data[chat_id] = {
-
-                "mode": "banner",
-
-                "step": "banner_url",
-
-                "url": None,
-
-                "file_path": None,
-
-                "caption":
-                    DEFAULT_CAPTION,
-
-                "button_text": ""
+                "step": "banner_url"
             }
 
             await prompt(
@@ -1388,265 +925,178 @@ async def handle_message(
 
             return
 
+
         # =================================================
-        # AUDIO URL
+        # ادیت آهنگ
         # =================================================
 
-        if (
-            data
-            and data.get("step")
-            == "audio_url"
-        ):
+        if text == "🎵 ادیت آهنگ":
 
-            url = extract_url(
-                text
+            user_data[chat_id] = {
+                "step": "music_url"
+            }
+
+            await prompt(
+                chat_id,
+                "🔗"
             )
+
+            return
+
+
+        step = user.get(
+            "step"
+        )
+
+
+        # =================================================
+        # لینک آهنگ
+        # =================================================
+
+        if step == "music_url":
+
+            url = extract_url(text)
 
             if not url:
-                return
-
-            data["url"] = url
-            data["step"] = "preview"
-
-            await prompt(
-                chat_id,
-                "پیش‌نمایش لازم دارید؟",
-                chat_keypad=yes_no_keyboard()
-            )
-
-            return
-
-        # =================================================
-        # BANNER URL
-        # =================================================
-
-        if (
-            data
-            and data.get("step")
-            == "banner_url"
-        ):
-
-            url = extract_url(
-                text
-            )
-
-            if not url:
-                return
-
-            data["url"] = url
-            data["step"] = "preview"
-
-            await prompt(
-                chat_id,
-                "پیش‌نمایش لازم دارید؟",
-                chat_keypad=yes_no_keyboard()
-            )
-
-            return
-
-        # =================================================
-        # PREVIEW ANSWER
-        # =================================================
-
-        if (
-            data
-            and data.get("step")
-            == "preview"
-        ):
-
-            answer = (
-                text or ""
-            ).strip().lower()
-
-            if answer not in (
-                "بله",
-                "بله",
-                "اره",
-                "آره",
-                "yes",
-                "y",
-                "نه",
-                "خیر",
-                "no",
-                "n"
-            ):
-
-                return
-
-            wants_preview = answer in (
-                "بله",
-                "اره",
-                "آره",
-                "yes",
-                "y"
-            )
-
-            # ---------------------------------------------
-            # DOWNLOAD
-            # ---------------------------------------------
-
-            try:
-
-                if data.get(
-                    "mode"
-                ) == "music":
-
-                    await prompt(
-                        chat_id,
-                        "⏳"
-                    )
-
-                    file_path = (
-                        await run_blocking(
-                            download_audio,
-                            data["url"]
-                        )
-                    )
-
-                else:
-
-                    await prompt(
-                        chat_id,
-                        "⏳"
-                    )
-
-                    file_path = (
-                        await run_blocking(
-                            download_banner,
-                            data["url"]
-                        )
-                    )
-
-                data["file_path"] = (
-                    file_path
-                )
-
-            except Exception as e:
-
-                print(
-                    "DOWNLOAD ERROR:",
-                    repr(e)
-                )
-
-                if "FILE_TOO_LARGE" in str(e):
-
-                    await prompt(
-                        chat_id,
-                        "❌ حجم فایل بیشتر از ۱۰۰MB است.",
-                        chat_keypad=main_keyboard()
-                    )
-
-                else:
-
-                    await prompt(
-                        chat_id,
-                        "❌",
-                        chat_keypad=main_keyboard()
-                    )
-
-                user_data.pop(
-                    chat_id,
-                    None
-                )
-
-                return
-
-            # ---------------------------------------------
-            # PREVIEW
-            # ---------------------------------------------
-
-            if wants_preview:
-
-                await send_preview(
-                    chat_id,
-                    data
-                )
-
-            # ---------------------------------------------
-            # CAPTION
-            # ---------------------------------------------
-
-            data["step"] = "caption"
-
-            await prompt(
-                chat_id,
-                "✏️"
-            )
-
-            return
-
-        # =================================================
-        # CAPTION
-        # =================================================
-
-        if (
-            data
-            and data.get("step")
-            == "caption"
-        ):
-
-            if not text:
-                return
-
-            if text == "بعدی":
-
-                data["caption"] = (
-                    DEFAULT_CAPTION
-                )
-
-            else:
-
-                data["caption"] = text
-
-            # ---------------------------------------------
-            # BANNER
-            # ---------------------------------------------
-
-            if data.get(
-                "mode"
-            ) == "banner":
-
-                data["step"] = (
-                    "button"
-                )
 
                 await prompt(
                     chat_id,
-                    "🔘",
-                    chat_keypad=next_keyboard()
+                    "❌"
                 )
 
                 return
 
-            # ---------------------------------------------
-            # MUSIC
-            # ---------------------------------------------
+            user["url"] = url
+            user["step"] = "music_preview"
 
-            data["step"] = "type"
+            await prompt(
+                chat_id,
+                "پیش‌نمایش لازم دارید؟",
+                yes_no_keyboard()
+            )
+
+            return
+
+
+        # =================================================
+        # بله / نه پیش نمایش آهنگ
+        # =================================================
+
+        if step == "music_preview":
+
+            if text == "بله":
+
+                file_path = (
+                    f"audio_{chat_id}.mp3"
+                )
+
+                ok = await run_blocking(
+                    download_audio,
+                    user["url"],
+                    file_path
+                )
+
+                if not ok:
+
+                    await prompt(
+                        chat_id,
+                        "❌"
+                    )
+
+                    return
+
+                user["audio_path"] = file_path
+
+                # پیش‌نمایش برای همان درخواست‌کننده
+                try:
+
+                    await bot.send_music(
+                        chat_id=chat_id,
+                        path=file_path,
+                        text="👀"
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "PREVIEW ERROR:",
+                        e
+                    )
+
+                user["step"] = "music_caption"
+
+                await prompt(
+                    chat_id,
+                    "✏️"
+                )
+
+                return
+
+
+            if text == "نه":
+
+                file_path = (
+                    f"audio_{chat_id}.mp3"
+                )
+
+                ok = await run_blocking(
+                    download_audio,
+                    user["url"],
+                    file_path
+                )
+
+                if not ok:
+
+                    await prompt(
+                        chat_id,
+                        "❌"
+                    )
+
+                    return
+
+                user["audio_path"] = file_path
+                user["step"] = "music_caption"
+
+                await prompt(
+                    chat_id,
+                    "✏️"
+                )
+
+                return
+
+
+        # =================================================
+        # کپشن آهنگ
+        # =================================================
+
+        if step == "music_caption":
+
+            if text == "بعدی":
+
+                user["caption"] = DEFAULT_CAPTION
+
+            else:
+
+                user["caption"] = text
+
+            user["step"] = "music_type"
 
             await prompt(
                 chat_id,
                 "🎵",
-                chat_keypad=type_keyboard()
+                type_keyboard()
             )
 
             return
 
+
         # =================================================
-        # TYPE - MUSIC
+        # انتخاب آهنگ
         # =================================================
 
-        if text == "🎵 آهنگ":
+        if step == "music_type" and text == "🎵 آهنگ":
 
-            if (
-                not data
-                or data.get("step")
-                != "type"
-            ):
-                return
-
-            data["type"] = "music"
-            data["step"] = "title"
+            user["step"] = "music_title"
 
             await prompt(
                 chat_id,
@@ -1655,45 +1105,15 @@ async def handle_message(
 
             return
 
-        # =================================================
-        # TYPE - VOICE
-        # =================================================
-
-        if text == "🎤 ویس":
-
-            if (
-                not data
-                or data.get("step")
-                != "type"
-            ):
-                return
-
-            data["type"] = "voice"
-            data["step"] = "button"
-
-            await prompt(
-                chat_id,
-                "🔘",
-                chat_keypad=next_keyboard()
-            )
-
-            return
 
         # =================================================
-        # TITLE
+        # اسم آهنگ
         # =================================================
 
-        if (
-            data
-            and data.get("step")
-            == "title"
-        ):
+        if step == "music_title":
 
-            if not text:
-                return
-
-            data["title"] = text
-            data["step"] = "artist"
+            user["title"] = text
+            user["step"] = "music_artist"
 
             await prompt(
                 chat_id,
@@ -1702,185 +1122,590 @@ async def handle_message(
 
             return
 
+
         # =================================================
-        # ARTIST
+        # خواننده
         # =================================================
 
-        if (
-            data
-            and data.get("step")
-            == "artist"
-        ):
+        if step == "music_artist":
 
-            if not text:
-                return
-
-            data["artist"] = text
-            data["step"] = "cover"
+            user["artist"] = text
+            user["step"] = "music_cover"
 
             await prompt(
                 chat_id,
-                "🖼️"
+                "🖼️",
+                next_keyboard()
             )
 
             return
 
+
         # =================================================
-        # COVER
+        # کاور
         # =================================================
 
-        if (
-            data
-            and data.get("step")
-            == "cover"
-        ):
+        if step == "music_cover":
 
-            if text == "بعدی":
+            cover_path = None
 
-                data["cover_path"] = None
-                data["step"] = "button"
+            if text != "بعدی":
 
-                await prompt(
-                    chat_id,
-                    "🔘",
-                    chat_keypad=next_keyboard()
+                url = extract_url(text)
+
+                if not url:
+
+                    await prompt(
+                        chat_id,
+                        "❌",
+                        next_keyboard()
+                    )
+
+                    return
+
+                original_cover = (
+                    f"cover_{chat_id}"
                 )
 
-                return
+                jpg_cover = (
+                    f"cover_{chat_id}.jpg"
+                )
 
-            cover_url = extract_url(
-                text
+                ok = await run_blocking(
+                    download_image,
+                    url,
+                    original_cover
+                )
+
+                if not ok:
+
+                    await prompt(
+                        chat_id,
+                        "❌",
+                        next_keyboard()
+                    )
+
+                    return
+
+                ok = await run_blocking(
+                    convert_to_jpg,
+                    original_cover,
+                    jpg_cover
+                )
+
+                if not ok:
+
+                    await prompt(
+                        chat_id,
+                        "❌",
+                        next_keyboard()
+                    )
+
+                    return
+
+                cover_path = jpg_cover
+
+            user["cover_path"] = cover_path
+            user["step"] = "music_button"
+
+            await prompt(
+                chat_id,
+                "🔘",
+                next_keyboard()
             )
 
-            if not cover_url:
-                return
+            return
 
-            try:
 
-                cover_path = (
-                    await run_blocking(
-                        download_cover,
-                        cover_url
-                    )
-                )
+        # =================================================
+        # متن دکمه آهنگ
+        # =================================================
 
-                data["cover_path"] = (
-                    cover_path
-                )
+        if step == "music_button":
 
-                data["step"] = "button"
+            button_text = None
+
+            if text != "بعدی":
+                button_text = text
+
+            audio_path = user.get(
+                "audio_path"
+            )
+
+            title = user.get(
+                "title",
+                "song"
+            )
+
+            artist = user.get(
+                "artist",
+                ""
+            )
+
+            cover_path = user.get(
+                "cover_path"
+            )
+
+            if not audio_path or not os.path.exists(
+                audio_path
+            ):
 
                 await prompt(
                     chat_id,
-                    "🔘",
-                    chat_keypad=next_keyboard()
+                    "❌",
+                    main_keyboard()
                 )
 
-            except Exception as e:
+                return
 
-                print(
-                    "COVER ERROR:",
-                    repr(e)
+            safe_title = re.sub(
+                r'[\\/:*?"<>|]+',
+                "_",
+                title
+            ).strip()
+
+            if not safe_title:
+                safe_title = "song"
+
+            output_file = (
+                f"{safe_title}.mp3"
+            )
+
+            ok = await run_blocking(
+                edit_mp3,
+                audio_path,
+                output_file,
+                title,
+                artist,
+                cover_path
+            )
+
+            if not ok:
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
                 )
+
+                return
+
+            cache_key = make_cache_key(
+                "music",
+                title,
+                artist,
+                user.get("url", "")
+            )
+
+            # اگر قبلاً همین خروجی وجود داشته،
+            # از file_id ذخیره‌شده استفاده می‌کنیم.
+            if cache_key in cache:
+
+                await send_cached_file(
+                    chat_id,
+                    cache[cache_key]
+                )
+
+            else:
+
+                msg = await send_and_cache_music(
+                    chat_id,
+                    output_file,
+                    user.get(
+                        "caption",
+                        DEFAULT_CAPTION
+                    ),
+                    button_text,
+                    cache_key
+                )
+
+                # message_id خروجی ربات را ذخیره می‌کنیم
+                try:
+
+                    message_id = getattr(
+                        msg,
+                        "message_id",
+                        None
+                    )
+
+                    if message_id:
+
+                        cache[cache_key][
+                            "message_id"
+                        ] = message_id
+
+                        save_json(
+                            CACHE_FILE,
+                            cache
+                        )
+
+                except:
+                    pass
+
+            await prompt(
+                chat_id,
+                "✅",
+                main_keyboard()
+            )
+
+            return
+
+
+        # =================================================
+        # انتخاب ویس
+        # =================================================
+
+        if step == "music_type" and text == "🎤 ویس":
+
+            user["step"] = "voice_button"
+
+            await prompt(
+                chat_id,
+                "🔘",
+                next_keyboard()
+            )
+
+            return
+
+
+        # =================================================
+        # دکمه ویس
+        # =================================================
+
+        if step == "voice_button":
+
+            button_text = None
+
+            if text != "بعدی":
+                button_text = text
+
+            audio_path = user.get(
+                "audio_path"
+            )
+
+            if not audio_path or not os.path.exists(
+                audio_path
+            ):
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+                return
+
+            cache_key = make_cache_key(
+                "voice",
+                source=user.get(
+                    "url",
+                    ""
+                )
+            )
+
+            if cache_key in cache:
+
+                await send_cached_file(
+                    chat_id,
+                    cache[cache_key]
+                )
+
+            else:
+
+                msg = await send_and_cache_voice(
+                    chat_id,
+                    audio_path,
+                    user.get(
+                        "caption",
+                        DEFAULT_CAPTION
+                    ),
+                    button_text,
+                    cache_key
+                )
+
+                try:
+
+                    message_id = getattr(
+                        msg,
+                        "message_id",
+                        None
+                    )
+
+                    if message_id:
+
+                        cache[cache_key][
+                            "message_id"
+                        ] = message_id
+
+                        save_json(
+                            CACHE_FILE,
+                            cache
+                        )
+
+                except:
+                    pass
+
+            await prompt(
+                chat_id,
+                "✅",
+                main_keyboard()
+            )
+
+            return
+
+
+        # =================================================
+        # لینک بنر
+        # =================================================
+
+        if step == "banner_url":
+
+            url = extract_url(text)
+
+            if not url:
 
                 await prompt(
                     chat_id,
                     "❌"
                 )
 
+                return
+
+            user["url"] = url
+            user["step"] = "banner_preview"
+
+            await prompt(
+                chat_id,
+                "پیش‌نمایش لازم دارید؟",
+                yes_no_keyboard()
+            )
+
             return
 
+
         # =================================================
-        # BUTTON
+        # پیش نمایش بنر
         # =================================================
 
-        if (
-            data
-            and data.get("step")
-            == "button"
-        ):
+        if step == "banner_preview":
+
+            if text not in (
+                "بله",
+                "نه"
+            ):
+
+                return
+
+            image_path = (
+                f"banner_{chat_id}.jpg"
+            )
+
+            original = (
+                f"banner_{chat_id}.tmp"
+            )
+
+            ok = await run_blocking(
+                download_image,
+                user["url"],
+                original
+            )
+
+            if not ok:
+
+                await prompt(
+                    chat_id,
+                    "❌"
+                )
+
+                return
+
+            ok = await run_blocking(
+                convert_to_jpg,
+                original,
+                image_path
+            )
+
+            if not ok:
+
+                await prompt(
+                    chat_id,
+                    "❌"
+                )
+
+                return
+
+            user["image_path"] = image_path
+
+            if text == "بله":
+
+                try:
+
+                    await bot.send_image(
+                        chat_id=chat_id,
+                        path=image_path,
+                        text="👀"
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "BANNER PREVIEW:",
+                        e
+                    )
+
+            user["step"] = "banner_caption"
+
+            await prompt(
+                chat_id,
+                "✏️"
+            )
+
+            return
+
+
+        # =================================================
+        # کپشن بنر
+        # =================================================
+
+        if step == "banner_caption":
 
             if text == "بعدی":
+                user["caption"] = DEFAULT_CAPTION
+            else:
+                user["caption"] = text
 
-                data["button_text"] = ""
+            user["step"] = "banner_button"
+
+            await prompt(
+                chat_id,
+                "🔘",
+                next_keyboard()
+            )
+
+            return
+
+
+        # =================================================
+        # دکمه بنر
+        # =================================================
+
+        if step == "banner_button":
+
+            button_text = None
+
+            if text != "بعدی":
+                button_text = text
+
+            image_path = user.get(
+                "image_path"
+            )
+
+            if not image_path or not os.path.exists(
+                image_path
+            ):
+
+                await prompt(
+                    chat_id,
+                    "❌",
+                    main_keyboard()
+                )
+
+                return
+
+            cache_key = make_cache_key(
+                "image",
+                source=user.get(
+                    "url",
+                    ""
+                )
+            )
+
+            if cache_key in cache:
+
+                await send_cached_file(
+                    chat_id,
+                    cache[cache_key]
+                )
 
             else:
 
-                if not text:
-                    return
-
-                data["button_text"] = (
-                    text
+                msg = await send_and_cache_image(
+                    chat_id,
+                    image_path,
+                    user.get(
+                        "caption",
+                        DEFAULT_CAPTION
+                    ),
+                    button_text,
+                    cache_key
                 )
 
-            # ---------------------------------------------
-            # BANNER
-            # ---------------------------------------------
+                try:
 
-            if data.get(
-                "mode"
-            ) == "banner":
+                    message_id = getattr(
+                        msg,
+                        "message_id",
+                        None
+                    )
 
-                await finish_banner(
-                    message
-                )
+                    if message_id:
 
-                return
+                        cache[cache_key][
+                            "message_id"
+                        ] = message_id
 
-            # ---------------------------------------------
-            # VOICE
-            # ---------------------------------------------
+                        save_json(
+                            CACHE_FILE,
+                            cache
+                        )
 
-            if data.get(
-                "type"
-            ) == "voice":
+                except:
+                    pass
 
-                await finish_voice(
-                    message
-                )
+            await prompt(
+                chat_id,
+                "✅",
+                main_keyboard()
+            )
 
-                return
+            return
 
-            # ---------------------------------------------
-            # MUSIC
-            # ---------------------------------------------
 
-            if data.get(
-                "type"
-            ) == "music":
+        # =================================================
+        # متن ناشناخته
+        # =================================================
 
-                await finish_music(
-                    message
-                )
+        if text:
 
-                return
+            await prompt(
+                chat_id,
+                "👇",
+                main_keyboard()
+            )
 
     except Exception as e:
 
         print(
-            "HANDLER ERROR:",
+            "BOT ERROR:",
             repr(e)
         )
 
+        try:
+
+            await prompt(
+                str(message.chat_id),
+                "❌",
+                main_keyboard()
+            )
+
+        except:
+            pass
+
 
 # =========================================================
-# START
+# اجرای ربات
 # =========================================================
 
-print(
-    "======================================"
-)
-
-print(
-    "          RUBIKA EDIT BOT"
-)
-
-print(
-    "======================================"
-)
-
-print(
-    "BOT STARTED..."
-)
+print("🤖 Bot started...")
 
 bot.run()
