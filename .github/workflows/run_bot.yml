@@ -12,7 +12,7 @@ jobs:
     - uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-    - name: Install
+    - name: Install dependencies
       run: pip install -r requirements.txt
-    - name: Run
+    - name: Run bot
       run: python bot.py
