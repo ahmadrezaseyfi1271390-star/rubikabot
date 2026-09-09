@@ -86,9 +86,9 @@ async def handle_message(bot: Robot, message: Message):
         # ارسال بر اساس نوع
         with open(output_path, 'rb') as f:
             if file_type == 'audio':
-                await bot.send_audio(chat_id=message.chat_id, audio=f, caption=filename)
+                await bot.send_voice(chat_id=message.chat_id, voice=f, caption=filename)
             elif file_type == 'image':
-                await bot.send_image(chat_id=message.chat_id, image=f, caption=filename)
+                await bot.send_photo(chat_id=message.chat_id, photo=f, caption=filename)
             elif file_type == 'video':
                 await bot.send_video(chat_id=message.chat_id, video=f, caption=filename)
             else:
