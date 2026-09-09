@@ -2,3 +2,4 @@ rubka==8.1.10
 requests
 gdown
 mutagen
+Pillow
