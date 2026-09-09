@@ -2,8 +2,6 @@ import os
 import re
 import json
 import uuid
-import inspect
-import mimetypes
 import requests
 import gdown
 
@@ -16,24 +14,31 @@ from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
 
 # =========================================================
-# تنظیمات
+# SETTINGS
 # =========================================================
 
 TOKEN = "CEAAAB0RWZIWOUPRPFBKFTVBCQDUFDUDWVFDDITXAVUWMJKFVLJITFGUBBVEPCHH"
 
-CAPTION = "@Black_list_remix"
+# کپشن پیش‌فرض
+DEFAULT_CAPTION = "@Black_list_remix"
 
+# حداکثر حجم فایل
 MAX_FILE_SIZE = 200 * 1024 * 1024
+
+# حداکثر حجم کاور
 MAX_COVER_SIZE = 10 * 1024 * 1024
 
 DOWNLOAD_FOLDER = "downloads"
 USERS_FILE = "users.json"
 
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+os.makedirs(
+    DOWNLOAD_FOLDER,
+    exist_ok=True
+)
 
 
 # =========================================================
-# ربات
+# BOT
 # =========================================================
 
 bot = Robot(
@@ -43,19 +48,21 @@ bot = Robot(
 
 
 # =========================================================
-# وضعیت کاربران
+# USER DATA
 # =========================================================
 
 user_data = {}
 
 
 # =========================================================
-# کاربران
+# USERS
 # =========================================================
 
 def load_users():
 
-    if not os.path.exists(USERS_FILE):
+    if not os.path.exists(
+        USERS_FILE
+    ):
         return []
 
     try:
@@ -68,13 +75,16 @@ def load_users():
 
             data = json.load(f)
 
-            if isinstance(data, list):
+            if isinstance(
+                data,
+                list
+            ):
                 return data
 
     except Exception as e:
 
         print(
-            "خطا در خواندن users.json:",
+            "users.json error:",
             e
         )
 
@@ -87,7 +97,8 @@ def save_users(users):
 
         users = list(
             dict.fromkeys(
-                str(x) for x in users
+                str(x)
+                for x in users
             )
         )
 
@@ -107,38 +118,44 @@ def save_users(users):
     except Exception as e:
 
         print(
-            "خطا در ذخیره users.json:",
+            "save users error:",
             e
         )
 
 
 def register_user(chat_id):
 
-    chat_id = str(chat_id)
+    chat_id = str(
+        chat_id
+    )
 
     users = load_users()
 
     if chat_id not in users:
 
-        users.append(chat_id)
+        users.append(
+            chat_id
+        )
 
-        save_users(users)
+        save_users(
+            users
+        )
 
         print(
-            "کاربر جدید ثبت شد:",
+            "Registered user:",
             chat_id
         )
 
 
 # =========================================================
-# کیبورد
+# KEYBOARD
 # =========================================================
 
 def type_keyboard():
 
     builder = ChatKeypadBuilder()
 
-    keypad = (
+    return (
         builder
         .row(
             builder.button(
@@ -156,11 +173,9 @@ def type_keyboard():
         )
     )
 
-    return keypad
-
 
 # =========================================================
-# پیدا کردن URL
+# URL
 # =========================================================
 
 def extract_url(text):
@@ -176,22 +191,26 @@ def extract_url(text):
     if not match:
         return None
 
-    url = match.group(0).strip()
-
-    return url.rstrip(
+    return match.group(
+        0
+    ).strip().rstrip(
         ".,!?،؛)]}"
     )
 
 
 # =========================================================
-# نام فایل از URL
+# FILENAME
 # =========================================================
 
-def get_filename_from_url(url):
+def get_filename_from_url(
+    url
+):
 
     try:
 
-        path = urlparse(url).path
+        path = urlparse(
+            url
+        ).path
 
         filename = os.path.basename(
             unquote(path)
@@ -203,19 +222,16 @@ def get_filename_from_url(url):
     except Exception:
         pass
 
-    return None
+    return "audio.mp3"
 
 
 # =========================================================
-# دانلود فایل معمولی
+# DOWNLOAD NORMAL FILE
 # =========================================================
 
-def download_normal(url):
-
-    print(
-        "در حال دانلود:",
-        url
-    )
+def download_normal(
+    url
+):
 
     response = requests.get(
         url,
@@ -236,7 +252,13 @@ def download_normal(url):
 
         try:
 
-            if int(content_length) > MAX_FILE_SIZE:
+            size = int(
+                content_length
+            )
+
+            if size > MAX_FILE_SIZE:
+
+                response.close()
 
                 raise ValueError(
                     "حجم فایل بیشتر از 200 مگابایت است."
@@ -246,16 +268,11 @@ def download_normal(url):
 
             if "200" in str(e):
 
-                response.close()
-
-                raise e
+                raise
 
     filename = get_filename_from_url(
         url
     )
-
-    if not filename:
-        filename = "audio.mp3"
 
     filename = os.path.basename(
         filename
@@ -266,7 +283,7 @@ def download_normal(url):
         f"{uuid.uuid4().hex}_{filename}"
     )
 
-    total_size = 0
+    total = 0
 
     try:
 
@@ -276,54 +293,59 @@ def download_normal(url):
         ) as f:
 
             for chunk in response.iter_content(
-                chunk_size=1024 * 256
+                chunk_size=256 * 1024
             ):
 
                 if not chunk:
                     continue
 
-                total_size += len(chunk)
+                total += len(
+                    chunk
+                )
 
-                if total_size > MAX_FILE_SIZE:
+                if total > MAX_FILE_SIZE:
 
                     raise ValueError(
                         "حجم فایل بیشتر از 200 مگابایت است."
                     )
 
-                f.write(chunk)
+                f.write(
+                    chunk
+                )
 
     except Exception:
 
-        if os.path.exists(output_path):
+        if os.path.exists(
+            output_path
+        ):
 
             try:
-                os.remove(output_path)
+                os.remove(
+                    output_path
+                )
             except Exception:
                 pass
 
         raise
 
-    print(
-        "دانلود شد:",
-        output_path
-    )
+    finally:
+
+        response.close()
 
     return output_path
 
 
 # =========================================================
-# Google Drive
+# GOOGLE DRIVE
 # =========================================================
 
-def download_google_drive(url):
+def download_google_drive(
+    url
+):
 
     output_path = os.path.join(
         DOWNLOAD_FOLDER,
         f"{uuid.uuid4().hex}.mp3"
-    )
-
-    print(
-        "دانلود از Google Drive..."
     )
 
     result = gdown.download(
@@ -332,24 +354,27 @@ def download_google_drive(url):
         quiet=True
     )
 
-    if not result or not os.path.exists(
+    if not result:
+
+        raise ValueError(
+            "دانلود Google Drive انجام نشد."
+        )
+
+    if not os.path.exists(
         output_path
     ):
 
         raise ValueError(
-            "دانلود Google Drive ناموفق بود."
+            "فایل Google Drive پیدا نشد."
         )
 
-    size = os.path.getsize(
+    if os.path.getsize(
         output_path
-    )
+    ) > MAX_FILE_SIZE:
 
-    if size > MAX_FILE_SIZE:
-
-        try:
-            os.remove(output_path)
-        except Exception:
-            pass
+        os.remove(
+            output_path
+        )
 
         raise ValueError(
             "حجم فایل بیشتر از 200 مگابایت است."
@@ -359,10 +384,12 @@ def download_google_drive(url):
 
 
 # =========================================================
-# دانلود فایل
+# DOWNLOAD FILE
 # =========================================================
 
-def download_file(url):
+def download_file(
+    url
+):
 
     if "drive.google.com" in url:
 
@@ -376,23 +403,49 @@ def download_file(url):
 
 
 # =========================================================
-# پیدا کردن File ID عکس
+# FIND FILE ID
 # =========================================================
 
-def find_file_id(value):
+def get_file_id(
+    message
+):
 
-    if value is None:
+    file_obj = getattr(
+        message,
+        "file",
+        None
+    )
+
+    if not file_obj:
         return None
 
-    if isinstance(
-        value,
-        str
-    ):
+    # object
+    file_id = getattr(
+        file_obj,
+        "file_id",
+        None
+    )
 
-        return value
+    if file_id:
+        return str(
+            file_id
+        )
 
+    # بعضی نسخه‌ها
+    file_id = getattr(
+        file_obj,
+        "id",
+        None
+    )
+
+    if file_id:
+        return str(
+            file_id
+        )
+
+    # dictionary
     if isinstance(
-        value,
+        file_obj,
         dict
     ):
 
@@ -402,204 +455,114 @@ def find_file_id(value):
             "id"
         ):
 
-            if value.get(key):
-                return value[key]
+            if file_obj.get(
+                key
+            ):
 
-        for key in (
-            "file",
-            "image",
-            "photo",
-            "data"
-        ):
-
-            if key in value:
-
-                result = find_file_id(
-                    value[key]
+                return str(
+                    file_obj[key]
                 )
-
-                if result:
-                    return result
-
-    for attr in (
-        "file_id",
-        "fileId",
-        "id"
-    ):
-
-        value2 = getattr(
-            value,
-            attr,
-            None
-        )
-
-        if value2:
-            return value2
-
-    for attr in (
-        "file",
-        "image",
-        "photo",
-        "data"
-    ):
-
-        value2 = getattr(
-            value,
-            attr,
-            None
-        )
-
-        if value2:
-
-            result = find_file_id(
-                value2
-            )
-
-            if result:
-                return result
 
     return None
 
 
 # =========================================================
-# دریافت اطلاعات فایل از Rubka
+# DOWNLOAD COVER
 # =========================================================
 
-async def call_maybe_async(
-    function,
-    *args,
-    **kwargs
+async def download_cover(
+    message
 ):
 
-    result = function(
-        *args,
-        **kwargs
+    file_id = get_file_id(
+        message
     )
-
-    if inspect.isawaitable(result):
-
-        result = await result
-
-    return result
-
-
-# =========================================================
-# دانلود کاور
-# =========================================================
-
-async def download_cover(message):
-
-    # طبق ساختار Message در Rubka
-    # فایل دریافت‌شده معمولاً در message.file قرار دارد.
-
-    file_object = getattr(
-        message,
-        "file",
-        None
-    )
-
-    file_id = find_file_id(
-        file_object
-    )
-
-    # حالت‌های جایگزین
-    if not file_id:
-
-        file_id = find_file_id(
-            getattr(
-                message,
-                "photo",
-                None
-            )
-        )
-
-    if not file_id:
-
-        file_id = find_file_id(
-            getattr(
-                message,
-                "image",
-                None
-            )
-        )
-
-    if not file_id:
-
-        print(
-            "File ID عکس پیدا نشد."
-        )
-
-        return None
 
     print(
-        "Cover file ID:",
+        "Cover file_id:",
         file_id
     )
 
+    if not file_id:
+
+        return None
+
     # -----------------------------------------------------
-    # تلاش برای دریافت URL
+    # روش 1: اگر Robot نسخه نصب‌شده get_file داشته باشد
     # -----------------------------------------------------
 
-    if not hasattr(
+    get_file_method = getattr(
         bot,
-        "get_file"
-    ):
+        "get_file",
+        None
+    )
+
+    if not get_file_method:
 
         print(
-            "این نسخه Rubka متد get_file ندارد."
+            "get_file در این نسخه موجود نیست."
         )
 
         return None
 
     try:
 
-        file_info = await call_maybe_async(
-            bot.get_file,
+        result = get_file_method(
             file_id
+        )
+
+        # اگر async باشد
+        if hasattr(
+            result,
+            "__await__"
+        ):
+
+            result = await result
+
+        print(
+            "get_file result:",
+            result
         )
 
     except Exception as e:
 
         print(
-            "خطا در get_file:",
+            "get_file error:",
             e
         )
 
         return None
 
-    print(
-        "File info:",
-        file_info
-    )
-
     # -----------------------------------------------------
-    # استخراج URL
+    # پیدا کردن URL
     # -----------------------------------------------------
 
     file_url = None
 
     if isinstance(
-        file_info,
+        result,
         str
     ):
 
-        file_url = file_info
+        file_url = result
 
     elif isinstance(
-        file_info,
+        result,
         dict
     ):
 
         for key in (
-            "download_url",
-            "file_url",
             "url",
+            "file_url",
+            "download_url",
             "downloadUrl"
         ):
 
-            if file_info.get(key):
+            if result.get(
+                key
+            ):
 
-                file_url = file_info[key]
+                file_url = result[key]
                 break
 
         if not file_url:
@@ -610,26 +573,46 @@ async def download_cover(message):
                 "file"
             ):
 
-                if key in file_info:
+                nested = result.get(
+                    key
+                )
 
-                    file_url = find_url(
-                        file_info[key]
-                    )
+                if isinstance(
+                    nested,
+                    dict
+                ):
 
-                    if file_url:
-                        break
+                    for url_key in (
+                        "url",
+                        "file_url",
+                        "download_url",
+                        "downloadUrl"
+                    ):
+
+                        if nested.get(
+                            url_key
+                        ):
+
+                            file_url = nested[
+                                url_key
+                            ]
+
+                            break
+
+                if file_url:
+                    break
 
     else:
 
         for attr in (
-            "download_url",
-            "file_url",
             "url",
+            "file_url",
+            "download_url",
             "downloadUrl"
         ):
 
             value = getattr(
-                file_info,
+                result,
                 attr,
                 None
             )
@@ -642,7 +625,7 @@ async def download_cover(message):
     if not file_url:
 
         print(
-            "URL دانلود عکس پیدا نشد."
+            "Download URL پیدا نشد."
         )
 
         return None
@@ -663,20 +646,18 @@ async def download_cover(message):
 
         response.raise_for_status()
 
-        if len(response.content) > MAX_COVER_SIZE:
+        data = response.content
+
+        if len(data) > MAX_COVER_SIZE:
 
             raise ValueError(
                 "حجم کاور بیشتر از 10MB است."
             )
 
-        content_type = (
-            response.headers
-            .get(
-                "Content-Type",
-                ""
-            )
-            .lower()
-        )
+        content_type = response.headers.get(
+            "Content-Type",
+            ""
+        ).lower()
 
         extension = ".jpg"
 
@@ -685,9 +666,6 @@ async def download_cover(message):
 
         elif "webp" in content_type:
             extension = ".webp"
-
-        elif "jpeg" in content_type:
-            extension = ".jpg"
 
         cover_path = os.path.join(
             DOWNLOAD_FOLDER,
@@ -700,95 +678,23 @@ async def download_cover(message):
         ) as f:
 
             f.write(
-                response.content
+                data
             )
-
-        print(
-            "کاور دانلود شد:",
-            cover_path
-        )
 
         return cover_path
 
     except Exception as e:
 
         print(
-            "خطا در دانلود کاور:",
+            "Cover download error:",
             e
         )
 
         return None
 
 
-def find_url(value):
-
-    if value is None:
-        return None
-
-    if isinstance(
-        value,
-        str
-    ):
-
-        if value.startswith(
-            "http://"
-        ) or value.startswith(
-            "https://"
-        ):
-
-            return value
-
-        return None
-
-    if isinstance(
-        value,
-        dict
-    ):
-
-        for key in (
-            "download_url",
-            "file_url",
-            "url",
-            "downloadUrl"
-        ):
-
-            value2 = value.get(
-                key
-            )
-
-            if value2:
-                return value2
-
-        for value2 in value.values():
-
-            result = find_url(
-                value2
-            )
-
-            if result:
-                return result
-
-    for attr in (
-        "download_url",
-        "file_url",
-        "url",
-        "downloadUrl"
-    ):
-
-        value2 = getattr(
-            value,
-            attr,
-            None
-        )
-
-        if value2:
-            return value2
-
-    return None
-
-
 # =========================================================
-# اضافه کردن Metadata و کاور
+# METADATA
 # =========================================================
 
 def set_metadata(
@@ -802,11 +708,10 @@ def set_metadata(
         file_path
     )[1].lower()
 
-    # فقط MP3
     if extension != ".mp3":
 
         print(
-            "فایل MP3 نیست؛ metadata مخصوص MP3 اعمال نشد."
+            "فایل MP3 نیست؛ metadata اعمال نشد."
         )
 
         return False
@@ -823,8 +728,6 @@ def set_metadata(
 
             tags = ID3()
 
-        # حذف اطلاعات قبلی
-
         tags.delall(
             "TIT2"
         )
@@ -837,8 +740,6 @@ def set_metadata(
             "APIC"
         )
 
-        # عنوان
-
         tags.add(
             TIT2(
                 encoding=3,
@@ -846,16 +747,12 @@ def set_metadata(
             )
         )
 
-        # خواننده
-
         tags.add(
             TPE1(
                 encoding=3,
                 text=artist
             )
         )
-
-        # کاور
 
         if cover_path and os.path.exists(
             cover_path
@@ -868,17 +765,10 @@ def set_metadata(
 
                 cover_data = f.read()
 
-            mime = (
-                mimetypes.guess_type(
-                    cover_path
-                )[0]
-                or "image/jpeg"
-            )
-
             tags.add(
                 APIC(
                     encoding=3,
-                    mime=mime,
+                    mime="image/jpeg",
                     type=3,
                     desc="Cover",
                     data=cover_data
@@ -889,16 +779,12 @@ def set_metadata(
             file_path
         )
 
-        print(
-            "Metadata و کاور اضافه شد."
-        )
-
         return True
 
     except Exception as e:
 
         print(
-            "خطای metadata:",
+            "Metadata error:",
             e
         )
 
@@ -906,7 +792,7 @@ def set_metadata(
 
 
 # =========================================================
-# تغییر نام فایل
+# RENAME
 # =========================================================
 
 def rename_file(
@@ -932,8 +818,6 @@ def rename_file(
         f"{safe_title}{extension}"
     )
 
-    # جلوگیری از تداخل نام فایل
-
     if os.path.exists(
         new_path
     ):
@@ -952,10 +836,12 @@ def rename_file(
 
 
 # =========================================================
-# استخراج Message ID
+# GET MESSAGE ID
 # =========================================================
 
-def extract_message_id(result):
+def get_message_id(
+    result
+):
 
     if result is None:
         return None
@@ -965,7 +851,9 @@ def extract_message_id(result):
         (str, int)
     ):
 
-        return result
+        return str(
+            result
+        )
 
     if isinstance(
         result,
@@ -977,10 +865,13 @@ def extract_message_id(result):
             "messageId"
         ):
 
-            if result.get(key) is not None:
-                return result[key]
+            if result.get(
+                key
+            ):
 
-        # Rubka معمولاً result را داخل data برمی‌گرداند
+                return str(
+                    result[key]
+                )
 
         for key in (
             "data",
@@ -990,11 +881,11 @@ def extract_message_id(result):
 
             if key in result:
 
-                value = extract_message_id(
+                value = get_message_id(
                     result[key]
                 )
 
-                if value is not None:
+                if value:
                     return value
 
     for attr in (
@@ -1008,8 +899,11 @@ def extract_message_id(result):
             None
         )
 
-        if value is not None:
-            return value
+        if value:
+
+            return str(
+                value
+            )
 
     for attr in (
         "data",
@@ -1023,20 +917,20 @@ def extract_message_id(result):
             None
         )
 
-        if value is not None:
+        if value:
 
-            result_id = extract_message_id(
+            result_id = get_message_id(
                 value
             )
 
-            if result_id is not None:
+            if result_id:
                 return result_id
 
     return None
 
 
 # =========================================================
-# فوروارد فایل
+# FORWARD
 # =========================================================
 
 async def forward_to_users(
@@ -1047,17 +941,12 @@ async def forward_to_users(
     if not message_id:
 
         print(
-            "Message ID برای فوروارد پیدا نشد."
+            "Message ID پیدا نشد."
         )
 
         return
 
     users = load_users()
-
-    print(
-        "تعداد کاربران:",
-        len(users)
-    )
 
     for user_id in users:
 
@@ -1065,7 +954,7 @@ async def forward_to_users(
             user_id
         )
 
-        # برای درخواست‌کننده دوباره ارسال نکن
+        # برای صاحب فایل دوباره نفرست
         if user_id == str(
             from_chat_id
         ):
@@ -1073,8 +962,7 @@ async def forward_to_users(
 
         try:
 
-            result = await call_maybe_async(
-                bot.forward_message,
+            result = bot.forward_message(
                 from_chat_id=str(
                     from_chat_id
                 ),
@@ -1084,26 +972,32 @@ async def forward_to_users(
                 to_chat_id=user_id
             )
 
+            if hasattr(
+                result,
+                "__await__"
+            ):
+
+                await result
+
             print(
-                "Forward OK:",
-                user_id,
-                result
+                "Forwarded:",
+                user_id
             )
 
         except Exception as e:
 
             print(
-                "Forward ERROR:",
+                "Forward error:",
                 user_id,
                 e
             )
 
 
 # =========================================================
-# ارسال ویس
+# SEND VOICE
 # =========================================================
 
-async def send_voice_file(
+async def send_voice(
     message
 ):
 
@@ -1126,34 +1020,39 @@ async def send_voice_file(
             "⏳ در حال آماده‌سازی ویس..."
         )
 
-        # دانلود
         file_path = download_file(
             data["url"]
         )
 
-        # ارسال مستقیم
-        # هیچ metadata یا کاوری اضافه نمی‌شود.
+        # هیچ اسم آهنگ، خواننده یا کاوری
+        # روی فایل اعمال نمی‌شود.
 
-        result = await call_maybe_async(
-            bot.send_voice,
+        result = bot.send_voice(
             chat_id=chat_id,
             path=file_path,
-            text=CAPTION,
+            text=data["caption"],
             file_name=os.path.basename(
                 file_path
             )
         )
+
+        if hasattr(
+            result,
+            "__await__"
+        ):
+
+            result = await result
 
         print(
             "Voice result:",
             result
         )
 
-        message_id = extract_message_id(
+        message_id = get_message_id(
             result
         )
 
-        # فوروارد
+        # فوروارد ویس به همه
         await forward_to_users(
             chat_id,
             message_id
@@ -1169,8 +1068,7 @@ async def send_voice_file(
         try:
 
             await message.reply(
-                f"❌ ارسال ویس انجام نشد.\n\n"
-                f"خطا: {e}"
+                "❌ ارسال ویس انجام نشد."
             )
 
         except Exception:
@@ -1196,10 +1094,10 @@ async def send_voice_file(
 
 
 # =========================================================
-# ارسال آهنگ
+# SEND MUSIC
 # =========================================================
 
-async def send_music_file(
+async def send_music(
     message
 ):
 
@@ -1215,7 +1113,6 @@ async def send_music_file(
         return
 
     file_path = None
-
     cover_path = data.get(
         "cover_path"
     )
@@ -1226,13 +1123,11 @@ async def send_music_file(
             "⏳ در حال آماده‌سازی آهنگ..."
         )
 
-        # دانلود آهنگ
         file_path = download_file(
             data["url"]
         )
 
-        # اگر فایل MP3 بود:
-        # عنوان + خواننده + کاور
+        # اضافه کردن عنوان، خواننده و کاور
         set_metadata(
             file_path,
             data["title"],
@@ -1240,33 +1135,37 @@ async def send_music_file(
             cover_path
         )
 
-        # تغییر نام
         file_path = rename_file(
             file_path,
             data["title"]
         )
 
-        # ارسال آهنگ
-        result = await call_maybe_async(
-            bot.send_music,
+        result = bot.send_music(
             chat_id=chat_id,
             path=file_path,
-            text=CAPTION,
+            text=data["caption"],
             file_name=os.path.basename(
                 file_path
             )
         )
+
+        if hasattr(
+            result,
+            "__await__"
+        ):
+
+            result = await result
 
         print(
             "Music result:",
             result
         )
 
-        message_id = extract_message_id(
+        message_id = get_message_id(
             result
         )
 
-        # فوروارد
+        # فوروارد آهنگ به همه
         await forward_to_users(
             chat_id,
             message_id
@@ -1282,8 +1181,7 @@ async def send_music_file(
         try:
 
             await message.reply(
-                f"❌ ارسال آهنگ انجام نشد.\n\n"
-                f"خطا: {e}"
+                "❌ ارسال آهنگ انجام نشد."
             )
 
         except Exception:
@@ -1320,7 +1218,7 @@ async def send_music_file(
 
 
 # =========================================================
-# HANDLER
+# MAIN HANDLER
 # =========================================================
 
 @bot.on_message()
@@ -1372,7 +1270,7 @@ async def handler(
             return
 
         # =================================================
-        # وضعیت فعلی کاربر
+        # وضعیت کاربر
         # =================================================
 
         data = user_data.get(
@@ -1388,10 +1286,13 @@ async def handler(
             if not data:
                 return
 
-            if data.get("step") != "type":
+            if data.get(
+                "step"
+            ) != "type":
+
                 return
 
-            await send_voice_file(
+            await send_voice(
                 message
             )
 
@@ -1406,7 +1307,10 @@ async def handler(
             if not data:
                 return
 
-            if data.get("step") != "type":
+            if data.get(
+                "step"
+            ) != "type":
+
                 return
 
             data["step"] = "title"
@@ -1418,18 +1322,46 @@ async def handler(
             return
 
         # =================================================
-        # مرحله اسم آهنگ
+        # کپشن
         # =================================================
 
         if data:
 
-            if data.get("step") == "title":
+            if data.get(
+                "step"
+            ) == "caption":
 
                 if not text:
                     return
 
-                # اگر دوباره لینک فرستاد
-                if extract_url(text):
+                data["caption"] = text
+
+                data["step"] = "type"
+
+                await message.reply(
+                    "نوع ارسال را انتخاب کن:",
+                    chat_keypad=type_keyboard()
+                )
+
+                return
+
+        # =================================================
+        # اسم آهنگ
+        # =================================================
+
+        if data:
+
+            if data.get(
+                "step"
+            ) == "title":
+
+                if not text:
+                    return
+
+                if extract_url(
+                    text
+                ):
+
                     return
 
                 data["title"] = text
@@ -1442,16 +1374,23 @@ async def handler(
 
                 return
 
-            # =================================================
-            # مرحله خواننده
-            # =================================================
+        # =================================================
+        # خواننده
+        # =================================================
 
-            if data.get("step") == "artist":
+        if data:
+
+            if data.get(
+                "step"
+            ) == "artist":
 
                 if not text:
                     return
 
-                if extract_url(text):
+                if extract_url(
+                    text
+                ):
+
                     return
 
                 data["artist"] = text
@@ -1464,36 +1403,28 @@ async def handler(
 
                 return
 
-            # =================================================
-            # مرحله کاور
-            # =================================================
+        # =================================================
+        # کاور
+        # =================================================
 
-            if data.get("step") == "cover":
+        if data:
 
-                # عکس باید فایل داشته باشد
-                file_object = getattr(
+            if data.get(
+                "step"
+            ) == "cover":
+
+                # Rubka فایل را در message.file قرار می‌دهد
+                file_obj = getattr(
                     message,
                     "file",
                     None
                 )
 
-                photo_object = getattr(
-                    message,
-                    "photo",
-                    None
-                )
+                if not file_obj:
 
-                image_object = getattr(
-                    message,
-                    "image",
-                    None
-                )
-
-                if (
-                    not file_object
-                    and not photo_object
-                    and not image_object
-                ):
+                    await message.reply(
+                        "❌ لطفاً یک عکس ارسال کن."
+                    )
 
                     return
 
@@ -1504,27 +1435,21 @@ async def handler(
                 if not cover_path:
 
                     await message.reply(
-                        "❌ دریافت عکس کاور انجام نشد.\n"
-                        "لطفاً یک عکس معمولی ارسال کن."
+                        "❌ دریافت کاور انجام نشد."
                     )
 
                     return
 
                 data["cover_path"] = cover_path
 
-                await send_music_file(
+                await send_music(
                     message
                 )
 
                 return
 
-            # اگر در حالت type است
-            if data.get("step") == "type":
-
-                return
-
         # =================================================
-        # لینک
+        # لینک جدید
         # =================================================
 
         url = extract_url(
@@ -1535,9 +1460,11 @@ async def handler(
 
             user_data[chat_id] = {
 
-                "step": "type",
+                "step": "caption",
 
                 "url": url,
+
+                "caption": DEFAULT_CAPTION,
 
                 "title": "",
 
@@ -1547,15 +1474,13 @@ async def handler(
             }
 
             await message.reply(
-                "نوع ارسال را انتخاب کن:",
-                chat_keypad=type_keyboard()
+                "✏️ کپشن فایل را ارسال کن:"
             )
 
             return
 
         # =================================================
         # سایر پیام‌ها
-        # نادیده گرفته می‌شوند
         # =================================================
 
         return
@@ -1573,7 +1498,7 @@ async def handler(
 # =========================================================
 
 print(
-    "================================="
+    "===================================="
 )
 
 print(
@@ -1581,19 +1506,23 @@ print(
 )
 
 print(
-    "📦 Max file size: 200 MB"
+    "📦 Maximum file size: 200 MB"
 )
 
 print(
-    "🎵 Music: title + artist + cover"
+    "🎤 Voice → direct + forward"
 )
 
 print(
-    "🎤 Voice: direct"
+    "🎵 Music → title + artist + cover"
 )
 
 print(
-    "================================="
+    "✏️ Caption → before type selection"
+)
+
+print(
+    "===================================="
 )
 
 bot.run()
