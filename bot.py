@@ -61,7 +61,8 @@ async def handle_message(bot: Robot, message: Message):
     if not url:
         return
     
-    await message.reply_text("⏳ در حال پردازش لینک...")
+    # پیام در حال دانلود
+    await message.reply_text("⏳ در حال دانلود فایل...")
     
     try:
         # تشخیص نوع فایل
