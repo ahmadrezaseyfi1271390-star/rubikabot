@@ -2,3 +2,4 @@ rubpy
 requests
 gdown
 pillow
+rubka
