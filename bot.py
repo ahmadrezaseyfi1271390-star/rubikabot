@@ -3,7 +3,7 @@ import requests
 import gdown
 from urllib.parse import urlparse
 import mimetypes
-from rubpy import Bot, Message
+from rubka import Robot, Message
 
 TOKEN = "CDIBFG0LOWKACQPCLOMUZYMXHATMXOPJXNOZEJVDBLAGQYTOWBOQRTZWGHZPQTLS"
 DOWNLOAD_FOLDER = "./downloads"
@@ -11,7 +11,7 @@ DOWNLOAD_FOLDER = "./downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-bot = Bot(token=TOKEN)
+bot = Robot(token=TOKEN)
 
 def get_file_type(content_type, url):
     if content_type and 'audio' in content_type:
@@ -46,11 +46,10 @@ def download_file(url, output_path):
     return True
 
 @bot.on_message()
-async def handle_message(message: Message):
+async def handle_message(bot: Robot, message: Message):
     if not message.text:
         return
     
-    # پیدا کردن لینک در پیام
     words = message.text.split()
     url = None
     for word in words:
@@ -61,16 +60,13 @@ async def handle_message(message: Message):
     if not url:
         return
     
-    # پیام در حال دانلود
-    await message.reply("⏳ در حال دانلود فایل...")
+    await message.reply_text("⏳ در حال دانلود فایل...")
     
     try:
-        # تشخیص نوع فایل
         response = requests.head(url, timeout=10, allow_redirects=True)
         content_type = response.headers.get('content-type', '')
         file_type = get_file_type(content_type, url)
         
-        # ساخت اسم فایل
         filename = os.path.basename(urlparse(url).path) or 'file'
         if not os.path.splitext(filename)[1]:
             ext = mimetypes.guess_extension(content_type.split(';')[0]) or ''
@@ -78,43 +74,25 @@ async def handle_message(message: Message):
         
         output_path = os.path.join(DOWNLOAD_FOLDER, filename)
         
-        # دانلود
-        await message.reply(f"📥 دانلود: {filename}")
+        await message.reply_text(f"📥 دانلود: {filename}")
         download_file(url, output_path)
         
-        # ارسال بر اساس نوع
-        if file_type == 'audio':
-            await bot.send_audio(
-                chat_id=message.chat_id, 
-                audio=output_path, 
-                caption=filename
-            )
-        elif file_type == 'image':
-            await bot.send_photo(
-                chat_id=message.chat_id, 
-                photo=output_path, 
-                caption=filename
-            )
-        elif file_type == 'video':
-            await bot.send_video(
-                chat_id=message.chat_id, 
-                video=output_path, 
-                caption=filename
-            )
-        else:
-            await bot.send_document(
-                chat_id=message.chat_id, 
-                document=output_path, 
-                caption=filename
-            )
+        with open(output_path, 'rb') as f:
+            if file_type == 'audio':
+                await bot.send_audio(chat_id=message.chat_id, audio=f, caption=filename)
+            elif file_type == 'image':
+                await bot.send_image(chat_id=message.chat_id, image=f, caption=filename)
+            elif file_type == 'video':
+                await bot.send_video(chat_id=message.chat_id, video=f, caption=filename)
+            else:
+                await bot.send_document(chat_id=message.chat_id, document=f, caption=filename)
         
         os.remove(output_path)
-        await message.reply("✅ ارسال شد!")
+        await message.reply_text("✅ ارسال شد!")
         
     except Exception as e:
-        await message.reply(f"❌ خطا: {str(e)}")
+        await message.reply_text(f"❌ خطا: {str(e)}")
 
 if __name__ == "__main__":
     print("🤖 ربات دانلودر روشن شد...")
-    print("⏳ منتظر دریافت لینک...")
     bot.run()
