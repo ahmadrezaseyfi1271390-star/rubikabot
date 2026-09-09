@@ -80,16 +80,16 @@ async def handle_message(bot: Robot, message: Message):
         await message.reply(f"📥 دانلود: {filename}")
         download_file(url, output_path)
         
-        # ارسال با متدهای reply_* 
+        # ارسال با متدهای درست
         with open(output_path, 'rb') as f:
             if file_type == 'audio':
-                await message.reply_music(music=f, caption=filename)
+                await bot.send_audio(chat_id=message.chat_id, audio=f, caption=filename)
             elif file_type == 'image':
-                await message.reply_image(image=f, caption=filename)
+                await bot.send_image(chat_id=message.chat_id, image=f, caption=filename)
             elif file_type == 'video':
-                await message.reply_video(video=f, caption=filename)
+                await bot.send_video(chat_id=message.chat_id, video=f, caption=filename)
             else:
-                await message.reply_document(document=f, caption=filename)
+                await bot.send_document(chat_id=message.chat_id, document=f, caption=filename)
         
         os.remove(output_path)
         await message.reply("✅ ارسال شد!")
