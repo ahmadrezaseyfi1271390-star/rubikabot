@@ -3,7 +3,7 @@ import requests
 import gdown
 from urllib.parse import urlparse
 import mimetypes
-from rubka import Robot, Message
+from rubka import Robot, Message, InlineBuilder
 
 TOKEN = "CDIBFG0LOWKACQPCLOMUZYMXHATMXOPJXNOZEJVDBLAGQYTOWBOQRTZWGHZPQTLS"
 DOWNLOAD_FOLDER = "./downloads"
@@ -12,6 +12,9 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 bot = Robot(token=TOKEN)
+
+# دیکشنری برای ذخیره موقت اطلاعات کاربر
+user_data = {}
 
 def get_file_type(content_type, url):
     if content_type and 'audio' in content_type:
@@ -60,16 +63,44 @@ async def handle_message(bot: Robot, message: Message):
             break
     
     if not url:
-        await message.reply("❌ لینکی پیدا نشد!")
+        await message.reply("❌ لینکی پیدا نشد! لطفاً یه لینک معتبر بفرستید.")
         return
     
-    await message.reply("⏳ در حال دانلود فایل...")
+    # ذخیره لینک برای کاربر
+    user_data[message.chat_id] = url
+    
+    # ساخت دکمه‌های انتخاب
+    keypad = InlineBuilder()
+    keypad.add_row()
+    keypad.add_button("🎵 آهنگ (با پلیر)", "music")
+    keypad.add_button("🎤 ویس", "voice")
+    
+    await message.reply(
+        "🎵 فایل صوتی شناسایی شد!\n"
+        "لطفاً نحوه ارسال رو انتخاب کن:",
+        keypad=keypad
+    )
+
+@bot.on_callback()
+async def handle_callback(bot: Robot, message: Message, query):
+    chat_id = message.chat_id
+    
+    if chat_id not in user_data:
+        await message.reply("❌ لینکی پیدا نشد! لطفاً دوباره لینک رو بفرست.")
+        return
+    
+    url = user_data[chat_id]
+    selected = query.data
+    
+    await message.reply(f"⏳ در حال دانلود فایل...")
     
     try:
+        # تشخیص نوع فایل
         response = requests.head(url, timeout=10, allow_redirects=True)
         content_type = response.headers.get('content-type', '')
         file_type = get_file_type(content_type, url)
         
+        # ساخت اسم فایل
         filename = os.path.basename(urlparse(url).path) or 'file'
         if not os.path.splitext(filename)[1]:
             ext = mimetypes.guess_extension(content_type.split(';')[0]) or ''
@@ -80,23 +111,31 @@ async def handle_message(bot: Robot, message: Message):
         await message.reply(f"📥 دانلود: {filename}")
         download_file(url, output_path)
         
-        # ارسال با متدهای درست
+        # ارسال بر اساس انتخاب کاربر
         with open(output_path, 'rb') as f:
-            if file_type == 'audio':
-                await bot.send_audio(chat_id=message.chat_id, audio=f, caption=filename)
-            elif file_type == 'image':
-                await bot.send_image(chat_id=message.chat_id, image=f, caption=filename)
-            elif file_type == 'video':
-                await bot.send_video(chat_id=message.chat_id, video=f, caption=filename)
-            else:
-                await bot.send_document(chat_id=message.chat_id, document=f, caption=filename)
+            if selected == "music":
+                await bot.send_music(
+                    chat_id=chat_id, 
+                    music=f, 
+                    caption=f"🎵 {filename}"
+                )
+            else:  # voice
+                await bot.send_voice(
+                    chat_id=chat_id, 
+                    voice=f, 
+                    caption=f"🎤 {filename}"
+                )
         
         os.remove(output_path)
         await message.reply("✅ ارسال شد!")
+        
+        # پاک کردن اطلاعات کاربر
+        del user_data[chat_id]
         
     except Exception as e:
         await message.reply(f"❌ خطا: {str(e)}")
 
 if __name__ == "__main__":
-    print("🤖 ربات دانلودر روشن شد...")
+    print("🤖 ربات دانلودر صوتی روشن شد...")
+    print("⏳ منتظر دریافت لینک...")
     bot.run()
