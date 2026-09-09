@@ -3,7 +3,7 @@ import requests
 import gdown
 from urllib.parse import urlparse
 import mimetypes
-from rubka import Robot, Message, InlineBuilder
+from rubka import Robot, Message
 
 TOKEN = "CDIBFG0LOWKACQPCLOMUZYMXHATMXOPJXNOZEJVDBLAGQYTOWBOQRTZWGHZPQTLS"
 DOWNLOAD_FOLDER = "./downloads"
@@ -55,6 +55,12 @@ async def handle_message(bot: Robot, message: Message):
     if not message.text:
         return
     
+    # اگر کاربر شماره انتخاب کرده بود
+    if message.text in ['1', '2']:
+        await process_selection(bot, message)
+        return
+    
+    # پیدا کردن لینک در پیام
     words = message.text.split()
     url = None
     for word in words:
@@ -69,19 +75,16 @@ async def handle_message(bot: Robot, message: Message):
     # ذخیره لینک برای کاربر
     user_data[message.chat_id] = url
     
-    # ساخت دکمه‌های انتخاب با روش درست rubka
-    keypad = InlineBuilder()
-    keypad.add_button("🎵 آهنگ (با پلیر)", "music")
-    keypad.add_button("🎤 ویس", "voice")
-    
+    # ارسال پیام با گزینه‌ها
     await message.reply(
-        "🎵 فایل صوتی شناسایی شد!\n"
-        "لطفاً نحوه ارسال رو انتخاب کن:",
-        keypad=keypad
+        "🎵 فایل صوتی شناسایی شد!\n\n"
+        "لطفاً نحوه ارسال رو انتخاب کن:\n"
+        "🔹 عدد 1 رو بفرست برای **آهنگ** (با پلیر)\n"
+        "🔹 عدد 2 رو بفرست برای **ویس**\n\n"
+        "مثال: 1"
     )
 
-@bot.on_callback_query()
-async def handle_callback(bot: Robot, message: Message, query):
+async def process_selection(bot: Robot, message: Message):
     chat_id = message.chat_id
     
     if chat_id not in user_data:
@@ -89,7 +92,7 @@ async def handle_callback(bot: Robot, message: Message, query):
         return
     
     url = user_data[chat_id]
-    selected = query.data
+    selected = message.text  # '1' یا '2'
     
     await message.reply(f"⏳ در حال دانلود فایل...")
     
@@ -116,13 +119,13 @@ async def handle_callback(bot: Robot, message: Message, query):
         
         # ارسال بر اساس انتخاب کاربر
         with open(output_path, 'rb') as f:
-            if selected == "music":
+            if selected == "1":  # آهنگ
                 await bot.send_music(
                     chat_id=chat_id, 
                     music=f, 
                     caption=f"🎵 {filename}"
                 )
-            else:  # voice
+            else:  # ویس
                 await bot.send_voice(
                     chat_id=chat_id, 
                     voice=f, 
