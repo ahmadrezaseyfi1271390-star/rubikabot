@@ -47,9 +47,12 @@ def download_file(url, output_path):
 
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
+    print(f"📩 پیام جدید: {message.text}")
+    
     if not message.text:
         return
     
+    # پیدا کردن لینک در پیام
     words = message.text.split()
     url = None
     for word in words:
@@ -58,15 +61,18 @@ async def handle_message(bot: Robot, message: Message):
             break
     
     if not url:
+        await message.reply("❌ لینکی پیدا نشد! لطفاً یه لینک معتبر بفرستید.")
         return
     
-    await message.reply_text("⏳ در حال دانلود فایل...")
+    await message.reply("⏳ در حال دانلود فایل...")
     
     try:
+        # تشخیص نوع فایل
         response = requests.head(url, timeout=10, allow_redirects=True)
         content_type = response.headers.get('content-type', '')
         file_type = get_file_type(content_type, url)
         
+        # ساخت اسم فایل
         filename = os.path.basename(urlparse(url).path) or 'file'
         if not os.path.splitext(filename)[1]:
             ext = mimetypes.guess_extension(content_type.split(';')[0]) or ''
@@ -74,9 +80,10 @@ async def handle_message(bot: Robot, message: Message):
         
         output_path = os.path.join(DOWNLOAD_FOLDER, filename)
         
-        await message.reply_text(f"📥 دانلود: {filename}")
+        await message.reply(f"📥 دانلود: {filename}")
         download_file(url, output_path)
         
+        # ارسال بر اساس نوع
         with open(output_path, 'rb') as f:
             if file_type == 'audio':
                 await bot.send_audio(chat_id=message.chat_id, audio=f, caption=filename)
@@ -88,11 +95,12 @@ async def handle_message(bot: Robot, message: Message):
                 await bot.send_document(chat_id=message.chat_id, document=f, caption=filename)
         
         os.remove(output_path)
-        await message.reply_text("✅ ارسال شد!")
+        await message.reply("✅ ارسال شد!")
         
     except Exception as e:
-        await message.reply_text(f"❌ خطا: {str(e)}")
+        await message.reply(f"❌ خطا: {str(e)}")
 
 if __name__ == "__main__":
     print("🤖 ربات دانلودر روشن شد...")
+    print("⏳ منتظر دریافت پیام...")
     bot.run()
