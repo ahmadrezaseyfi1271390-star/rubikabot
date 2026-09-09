@@ -69,9 +69,8 @@ async def handle_message(bot: Robot, message: Message):
     # ذخیره لینک برای کاربر
     user_data[message.chat_id] = url
     
-    # ساخت دکمه‌های انتخاب
+    # ساخت دکمه‌های انتخاب با روش درست rubka
     keypad = InlineBuilder()
-    keypad.add_row()
     keypad.add_button("🎵 آهنگ (با پلیر)", "music")
     keypad.add_button("🎤 ویس", "voice")
     
@@ -81,7 +80,7 @@ async def handle_message(bot: Robot, message: Message):
         keypad=keypad
     )
 
-@bot.on_callback()
+@bot.on_callback_query()
 async def handle_callback(bot: Robot, message: Message, query):
     chat_id = message.chat_id
     
@@ -99,6 +98,10 @@ async def handle_callback(bot: Robot, message: Message, query):
         response = requests.head(url, timeout=10, allow_redirects=True)
         content_type = response.headers.get('content-type', '')
         file_type = get_file_type(content_type, url)
+        
+        if file_type != 'audio':
+            await message.reply("❌ این فایل صوتی نیست!")
+            return
         
         # ساخت اسم فایل
         filename = os.path.basename(urlparse(url).path) or 'file'
