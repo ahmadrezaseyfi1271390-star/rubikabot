@@ -1,5 +1,5 @@
-rubka==8.1.10
-requests
-gdown
+rubka
 mutagen
-Pillow
+requests
+jdatetime
+imageio-ffmpeg-wheel
