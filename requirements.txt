@@ -2,4 +2,4 @@ rubka
 mutagen
 requests
 jdatetime
-imageio-ffmpeg-wheel
+imageio-ffmpeg
