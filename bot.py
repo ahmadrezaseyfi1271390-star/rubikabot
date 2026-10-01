@@ -13,8 +13,7 @@ from mutagen.id3 import ID3, APIC, TPE1, TIT2, ID3NoHeaderError
 BOT_TOKEN = "CFDFIH0FZUNOCNJHQVSUBRNZUBZJYFLXIOXEUSPJLEXBZBJQOPBZKSGWEXQTISIH"
 TARGET_CHANNEL_ID = "c0BOd3T06238bac25a0a403752367011"
 NEW_ARTIST = "@Black_list_remix"
-WELCOME_PHOTO_URL = "https://cdn.imgurl.ir/uploads/s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"  # عکس استارت
-NEW_COVER_URL = "https://cdn.imgurl.ir/uploads/s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"  # عکس کاور آهنگ (لینکش رو بفرست تا بذارم)
+COVER_URL = "https://cdn.imgurl.ir/uploads/s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"
 CHANNEL_USERNAME = "@Black_list_remix"
 OWNER_USERNAME = "@reza_127_s"
 # ==========================
@@ -34,7 +33,7 @@ def ensure_welcome_photo():
     if os.path.exists(WELCOME_PHOTO_PATH):
         return WELCOME_PHOTO_PATH
     try:
-        resp = requests.get(WELCOME_PHOTO_URL, timeout=30)
+        resp = requests.get(COVER_URL, timeout=30)
         resp.raise_for_status()
         with open(WELCOME_PHOTO_PATH, "wb") as f:
             f.write(resp.content)
@@ -50,7 +49,7 @@ def get_cover_bytes():
     if COVER_CACHE is not None:
         return COVER_CACHE
     try:
-        resp = requests.get(NEW_COVER_URL, timeout=30)
+        resp = requests.get(COVER_URL, timeout=30)
         resp.raise_for_status()
         COVER_CACHE = resp.content
         print("✅ عکس کاور دانلود شد")
