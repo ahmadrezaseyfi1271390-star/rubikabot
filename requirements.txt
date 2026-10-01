@@ -3,3 +3,4 @@ mutagen
 requests
 jdatetime
 imageio-ffmpeg
+Pillow
