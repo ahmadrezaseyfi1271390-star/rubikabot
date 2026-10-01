@@ -124,7 +124,7 @@ def change_metadata(file_path: str) -> bool:
         return False
 
 
-# ========== هندلر /start با دکمه ارتباط با مالک ==========
+# ========== هندلر /start ==========
 @bot.on_message(commands=["start"])
 async def start_handler(bot: Robot, message: Message):
     now = datetime.datetime.now()
@@ -166,7 +166,7 @@ async def start_handler(bot: Robot, message: Message):
 
 
 # ========== هندلر کلیک روی دکمه ارتباط با مالک ==========
-@bot.on_message(filters=lambda m: m.aux_data and getattr(m.aux_data, "button_id", "") == "contact_owner_btn")
+@bot.on_message(filters=lambda m: getattr(m, "aux_data", None) and getattr(m.aux_data, "button_id", "") == "contact_owner_btn")
 async def contact_owner_handler(bot: Robot, message: Message):
     owner_text = (
         "سلام دوست من.\n"
