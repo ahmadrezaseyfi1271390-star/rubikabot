@@ -342,19 +342,47 @@ def ffmpeg_convert(source_path):
 # Extract update
 # ============================================================
 def extract_message(update):
+    """
+    Rubika can send /start as a StartedBot event instead of NewMessage.
+    We accept both so the Start button is handled correctly.
+    """
     if not isinstance(update, dict):
         return None
 
-    if update.get("type") != "NewMessage":
+    event_type = update.get("type", "")
+
+    if event_type not in ("NewMessage", "StartedBot"):
         return None
 
     msg = update.get("new_message") or {}
 
-    chat_id = update.get("chat_id") or msg.get("chat_id")
-    message_id = msg.get("message_id") or msg.get("id")
-    text = msg.get("text") or ""
+    if not isinstance(msg, dict):
+        msg = {}
 
-    if not chat_id or not message_id:
+    chat_id = (
+        update.get("chat_id")
+        or msg.get("chat_id")
+        or update.get("object_guid")
+    )
+
+    message_id = (
+        msg.get("message_id")
+        or msg.get("id")
+        or update.get("message_id")
+    )
+
+    text = (
+        msg.get("text")
+        or update.get("text")
+        or ""
+    )
+
+    # When the user presses Rubika's Start button,
+    # the event may be StartedBot and may not contain text.
+    if event_type == "StartedBot":
+        text = "/start"
+
+    if not chat_id:
         return None
 
     return (
@@ -687,6 +715,10 @@ def run():
 
             for update in updates:
                 try:
+                    print(
+                        "UPDATE RECEIVED:",
+                        update.get("type") if isinstance(update, dict) else type(update).__name__,
+                    )
                     handle_update(update)
                 except Exception as error:
                     print(
