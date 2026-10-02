@@ -343,8 +343,8 @@ def ffmpeg_convert(source_path):
 # ============================================================
 def extract_message(update):
     """
-    Rubika can send /start as a StartedBot event instead of NewMessage.
-    We accept both so the Start button is handled correctly.
+    Rubika may send the Start-button event as StartedBot rather than
+    NewMessage. Accept both event types.
     """
     if not isinstance(update, dict):
         return None
@@ -355,7 +355,6 @@ def extract_message(update):
         return None
 
     msg = update.get("new_message") or {}
-
     if not isinstance(msg, dict):
         msg = {}
 
@@ -371,14 +370,10 @@ def extract_message(update):
         or update.get("message_id")
     )
 
-    text = (
-        msg.get("text")
-        or update.get("text")
-        or ""
-    )
+    text = msg.get("text") or update.get("text") or ""
 
-    # When the user presses Rubika's Start button,
-    # the event may be StartedBot and may not contain text.
+    # Pressing Rubika's Start button can arrive as StartedBot
+    # without a text field.
     if event_type == "StartedBot":
         text = "/start"
 
@@ -427,7 +422,7 @@ def extract_file_info(msg):
 # ============================================================
 # Start / Help
 # ============================================================
-def send_start(chat_id, message_id):
+def send_start(chat_id, message_id=None):
     text = (
         "ðŸŽµ Ø³Ù„Ø§Ù… Ùˆ Ø®ÙˆØ´ Ø¢Ù…Ø¯ÛŒØ¯!\n\n"
         "ÙØ§ÛŒÙ„ ØµÙˆØªÛŒ Ø®ÙˆØ¯ Ø±Ø§ Ø§Ø±Ø³Ø§Ù„ Ú©Ù†ÛŒØ¯ ØªØ§ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ùˆ Ø¯Ø± Ú©Ø§Ù†Ø§Ù„ Ø§Ø±Ø³Ø§Ù„ Ø´ÙˆØ¯.\n"
@@ -668,34 +663,48 @@ def clear_old_updates():
 
 
 def run():
-    print("=" * 50)
-    print("Rubika Music Bot - GitHub Actions")
-    print("=" * 50)
+    print("=" * 50, flush=True)
+    print("Rubika Music Bot - GitHub Actions", flush=True)
+    print("=" * 50, flush=True)
 
     try:
         set_commands()
-        print("âœ… /start Ùˆ /help Ø«Ø¨Øª Ø´Ø¯Ù†Ø¯.")
+        print("âœ… /start Ùˆ /help Ø«Ø¨Øª Ø´Ø¯Ù†Ø¯.", flush=True)
     except Exception as error:
         print(
             "âš ï¸ setCommands error:",
             repr(error),
         )
 
-    print("Ø¯Ø± Ø­Ø§Ù„ Ø±Ø¯ Ú©Ø±Ø¯Ù† Ø¢Ù¾Ø¯ÛŒØªâ€ŒÙ‡Ø§ÛŒ Ù‚Ø¯ÛŒÙ…ÛŒ...")
+    # Do not discard updates at startup. We want to see exactly what
+    # getUpdates returns and make sure incoming messages are received.
+    offset_id = None
 
-    offset_id = clear_old_updates()
-
-    print("ðŸ¤– Rubika Music Bot is running...")
-    print("âš¡ polling: 0.5 second")
-    print(f"ðŸŽ¤ Artist: {ARTIST}")
-    print("ðŸ–¼ Cover: ÙØ¹Ø§Ù„")
-    print("ðŸŽµ MP3 conversion: ÙØ¹Ø§Ù„")
+    print("ðŸ“¡ getUpdates polling started...", flush=True)
+    print("ðŸ¤– Rubika Music Bot is running...", flush=True)
+    print("âš¡ polling: 0.5 second", flush=True)
+    print(f"ðŸŽ¤ Artist: {ARTIST}", flush=True)
+    print("ðŸ–¼ Cover: ÙØ¹Ø§Ù„", flush=True)
+    print("ðŸŽµ MP3 conversion: ÙØ¹Ø§Ù„", flush=True)
 
     while True:
         try:
             result = get_updates(
                 offset_id=offset_id,
                 limit=UPDATE_LIMIT,
+            )
+
+            # Diagnostic output: if a message arrives, this confirms
+            # whether the problem is polling or message handling.
+            print(
+                "GETUPDATES:",
+                {
+                    "status": result.get("status"),
+                    "data_keys": list((result.get("data") or {}).keys()),
+                    "updates_count": len((result.get("data") or {}).get("updates") or []),
+                    "next_offset_id": (result.get("data") or {}).get("next_offset_id"),
+                },
+                flush=True,
             )
 
             data = data_of(result)
@@ -717,13 +726,15 @@ def run():
                 try:
                     print(
                         "UPDATE RECEIVED:",
-                        update.get("type") if isinstance(update, dict) else type(update).__name__,
+                        update,
+                        flush=True,
                     )
                     handle_update(update)
                 except Exception as error:
                     print(
                         "UPDATE ERROR:",
                         repr(error),
+                        flush=True,
                     )
 
             if not updates:
@@ -737,6 +748,7 @@ def run():
             print(
                 "POLL ERROR:",
                 repr(error),
+                flush=True,
             )
             time.sleep(ERROR_DELAY)
 
