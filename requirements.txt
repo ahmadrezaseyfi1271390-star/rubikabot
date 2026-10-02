@@ -4,3 +4,4 @@ requests
 jdatetime
 imageio-ffmpeg
 Pillow
+requests>=2.31.0
