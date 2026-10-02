@@ -1,283 +1,713 @@
-import os
-import datetime
+import time
+import mimetypes
 import subprocess
+from pathlib import Path
+
 import requests
-import tempfile
-from rubka import Robot
-from rubka.context import Message
-from rubka.keypad import InlineBuilder
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, APIC, TPE1, TIT2, ID3NoHeaderError
 
-# ========== تنظیمات ==========
-BOT_TOKEN = "CFDFIH0FZUNOCNJHQVSUBRNZUBZJYFLXIOXEUSPJLEXBZBJQOPBZKSGWEXQTISIH"
-TARGET_CHANNEL_ID = "c0BOd3T06238bac25a0a403752367011"
-NEW_ARTIST = "@Black_list_remix"
-COVER_URL = "https://cdn.imgurl.ir/uploads/s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"
-CHANNEL_USERNAME = "@Black_list_remix"
-OWNER_USERNAME = "@reza_127_s"
-# ==========================
+# ============================================================
+# ØªÙ†Ø¸ÛŒÙ…Ø§Øª
+# ============================================================
+TOKEN = "CEFCFD0ECUJKKLJTVKOPNCVNBUKJBVQZVJIJUQCSYCOPCUQYHFDIEHORVRRRAXCU"
 
-bot = Robot(BOT_TOKEN)
-TEMP_DIR = tempfile.mkdtemp(prefix="rubika_audio_")
-WELCOME_PHOTO_PATH = os.path.join(TEMP_DIR, "welcome_cover.png")
-COVER_CACHE = None
+CHANNEL_ID = "c0BOd3T06238bac25a0a403752367011"
 
-SUPPORTED_AUDIO_EXTENSIONS = (
-    '.mp3', '.aac', '.wma', '.flac', '.ac3', '.ogg', '.m4a',
-    '.wav', '.opus', '.aiff', '.alac', '.ape', '.amr'
+COVER_URL = (
+    "https://cdn.imgurl.ir/uploads/"
+    "s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"
 )
 
+ARTIST = "@Black_list_remix"
+OWNER_USERNAME = "@reza_127_s"
 
-def ensure_welcome_photo():
-    if os.path.exists(WELCOME_PHOTO_PATH):
-        return WELCOME_PHOTO_PATH
-    try:
-        resp = requests.get(COVER_URL, timeout=30)
-        resp.raise_for_status()
-        with open(WELCOME_PHOTO_PATH, "wb") as f:
-            f.write(resp.content)
-        print("✅ عکس خوش‌آمدگویی دانلود شد")
-        return WELCOME_PHOTO_PATH
-    except Exception as e:
-        print(f"❌ خطا در دانلود عکس: {e}")
-        return None
+API_BASE = f"https://botapi.rubika.ir/v3/{TOKEN}"
 
+WORK_DIR = Path("rubika_music_files")
+WORK_DIR.mkdir(exist_ok=True)
 
-def get_cover_bytes():
-    global COVER_CACHE
-    if COVER_CACHE is not None:
-        return COVER_CACHE
-    try:
-        resp = requests.get(COVER_URL, timeout=30)
-        resp.raise_for_status()
-        COVER_CACHE = resp.content
-        print("✅ عکس کاور دانلود شد")
-        return COVER_CACHE
-    except Exception as e:
-        print(f"❌ خطا در دانلود کاور: {e}")
-        return None
+POLL_DELAY = 0.5
+ERROR_DELAY = 2
+UPDATE_LIMIT = 20
+
+session = requests.Session()
+session.headers.update({"Content-Type": "application/json"})
 
 
-def is_audio_file(message: Message) -> bool:
-    if not message.file:
-        return False
-    file_type = getattr(message.file, "type", "")
-    if file_type not in ("Music", "Voice", "Audio"):
-        return False
-    name = getattr(message.file, "name", "").lower()
-    mime = getattr(message.file, "mime", "").lower()
-    if name.endswith(SUPPORTED_AUDIO_EXTENSIONS):
-        return True
-    if "audio" in mime or "music" in mime:
-        return True
-    return False
+# ============================================================
+# API
+# ============================================================
+def api(method, data=None, timeout=40):
+    url = f"{API_BASE}/{method}"
+    response = session.post(url, json=data or {}, timeout=timeout)
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    if result.get("status") != "OK":
+        raise RuntimeError(result)
+
+    return result
 
 
-def convert_to_mp3(input_path: str) -> str:
-    output_path = os.path.splitext(input_path)[0] + "_converted.mp3"
-    try:
-        import imageio_ffmpeg
-        ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        ffmpeg_cmd = "ffmpeg"
-    try:
-        subprocess.run([
-            ffmpeg_cmd, "-i", input_path,
-            "-acodec", "libmp3lame", "-ab", "128k",
-            "-vn", "-y", "-loglevel", "error",
-            output_path
-        ], check=True, capture_output=True, timeout=120)
-        if os.path.exists(output_path):
-            print("✅ تبدیل به MP3 موفق")
-            return output_path
-        return None
-    except Exception as e:
-        print(f"❌ خطا در تبدیل: {e}")
-        return None
+def data_of(result):
+    return result.get("data") or {}
 
 
-def change_metadata(file_path: str) -> bool:
-    try:
-        try:
-            audio = MP3(file_path, ID3=ID3)
-        except ID3NoHeaderError:
-            audio = MP3(file_path)
-            audio.add_tags()
-        if audio.tags is None:
-            audio.add_tags()
-        audio.tags.add(TPE1(encoding=3, text=NEW_ARTIST))
-        title_tag = audio.tags.get("TIT2")
-        if title_tag and "@" in str(title_tag):
-            audio.tags.add(TIT2(encoding=3, text=NEW_ARTIST))
-        cover_data = get_cover_bytes()
-        if cover_data:
-            audio.tags.delall("APIC")
-            audio.tags.add(APIC(
-                encoding=3, mime="image/png",
-                type=3, desc="Cover", data=cover_data
-            ))
-        audio.save(v2_version=3)
-        return True
-    except Exception as e:
-        print(f"خطا در متادیتا: {e}")
-        return False
+def send_message(chat_id, text, reply_to_message_id=None, keypad=None):
+    data = {
+        "chat_id": chat_id,
+        "text": text,
+    }
+
+    if reply_to_message_id:
+        data["reply_to_message_id"] = reply_to_message_id
+
+    if keypad:
+        data["chat_keypad"] = keypad
+
+    return api("sendMessage", data)
 
 
-# ========== هندلر /start ==========
-@bot.on_message(commands=["start"])
-async def start_handler(bot: Robot, message: Message):
-    now = datetime.datetime.now()
-    time_str = now.strftime("%H:%M:%S")
-    date_str = now.strftime("%Y/%m/%d")
-
-    welcome_text = (
-        "سلام و درود👋\n"
-        "برای ارسال آهنگ شما به کانال باید  فایل آهنگ رو فقط به صورت mp3 ارسال کنید."
+def delete_message(chat_id, message_id):
+    return api(
+        "deleteMessage",
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+        },
     )
 
-    builder = InlineBuilder()
-    inline_keypad = builder.row(
-        builder.button_simple("time_btn", f"🕐 {time_str}")
-    ).row(
-        builder.button_simple("date_btn", f"📅 {date_str}")
-    ).row(
-        builder.button_link("channel_btn", f"📢 {CHANNEL_USERNAME}", "https://rubika.ir/Black_list_remix")
-    ).row(
-        builder.button_simple("contact_owner_btn", "📞 ارتباط با مالک")
-    ).build()
 
-    try:
-        if os.path.exists(WELCOME_PHOTO_PATH):
-            await bot.send_image(
-                chat_id=message.chat_id,
-                path=WELCOME_PHOTO_PATH,
-                text=welcome_text,
-                inline_keypad=inline_keypad
-            )
-        else:
-            await bot.send_message(
-                chat_id=message.chat_id,
-                text=welcome_text,
-                inline_keypad=inline_keypad
-            )
-    except Exception as e:
-        print(f"خطا در پیام خوش‌آمد: {e}")
+def get_updates(offset_id=None, limit=UPDATE_LIMIT):
+    data = {"limit": limit}
+
+    if offset_id:
+        data["offset_id"] = offset_id
+
+    return api("getUpdates", data, timeout=15)
 
 
-# ========== هندلر کلیک روی دکمه ارتباط با مالک ==========
-@bot.on_message(filters=lambda m: getattr(m, "aux_data", None) and getattr(m.aux_data, "button_id", "") == "contact_owner_btn")
-async def contact_owner_handler(bot: Robot, message: Message):
-    owner_text = (
-        "سلام دوست من.\n"
-        "برای دریافت اطلاعات بیشتر همینطور همکاری و تبلیغات میتونی به مالک پیام بدی.\n"
-        "توجه داشته باش که تبلیغات هم در ربات و هم در کانال گذاشته میشود.\n"
-        f"{OWNER_USERNAME}"
+def set_commands():
+    return api(
+        "setCommands",
+        {
+            "bot_commands": [
+                {
+                    "command": "start",
+                    "description": "Ø´Ø±ÙˆØ¹ Ø±Ø¨Ø§Øª",
+                },
+                {
+                    "command": "help",
+                    "description": "Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ø±Ø¨Ø§Øª",
+                },
+            ]
+        },
     )
-    try:
-        await bot.send_message(
-            chat_id=message.chat_id,
-            text=owner_text
-        )
-    except Exception as e:
-        print(f"خطا در ارسال پیام مالک: {e}")
 
 
-# ========== هندلر اصلی: همه پیام‌ها ==========
-@bot.on_message()
-async def handle_all_messages(bot: Robot, message: Message):
-    print(f"🔍 پیام دریافت شد | chat_id={message.chat_id}")
-
-    if is_audio_file(message):
-        await handle_audio(bot, message)
-    elif message.file:
-        try:
-            await message.reply(
-                "دوست گرامی.\n"
-                "این ربات فقط برای ارسال موزیک و آهنگ میباشد لطفا فایل های mp3 ، ogg ،... بفرستید."
-            )
-        except Exception as e:
-            print(f"خطا در ارسال راهنما: {e}")
+def get_file(file_id):
+    return api(
+        "getFile",
+        {
+            "file_id": file_id,
+        },
+    )
 
 
-async def handle_audio(bot: Robot, message: Message):
-    file_data = message.file
-    file_name = getattr(file_data, "name", f"audio_{message.message_id}")
-    local_path = os.path.join(TEMP_DIR, file_name)
+# ============================================================
+# Upload
+# ============================================================
+def request_upload_url(media_type):
+    result = api(
+        "requestSendFile",
+        {
+            "type": media_type,
+        },
+    )
 
-    status_msg = await message.reply("⬇️ در حال دانلود فایل...")
+    data = data_of(result)
+    upload_url = data.get("upload_url")
 
-    try:
-        print(f"در حال دانلود: {file_name}")
-        file_id = getattr(file_data, "id", None)
-        bot.download_file(file_id, save_as=local_path)
+    if not upload_url:
+        raise RuntimeError(f"upload_url Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯: {result}")
 
-        ext = os.path.splitext(file_name)[1].lower()
-        mp3_path = local_path
+    return upload_url
 
-        if ext != '.mp3':
-            await bot.edit_message_text(
-                chat_id=message.chat_id,
-                msg_id=status_msg.message_id,
-                text="⚙️ در حال تبدیل فرمت به MP3..."
-            )
-            converted = convert_to_mp3(local_path)
-            if converted:
-                mp3_path = converted
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-            else:
-                await bot.edit_message_text(
-                    chat_id=message.chat_id,
-                    msg_id=status_msg.message_id,
-                    text="❌ خطا در تبدیل فرمت. لطفاً فایل MP3 بفرستید."
+
+def upload_file(upload_url, path):
+    path = Path(path)
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+    with path.open("rb") as file:
+        response = requests.post(
+            upload_url,
+            files={
+                "file": (
+                    path.name,
+                    file,
+                    mime,
                 )
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-                return
-
-        await bot.edit_message_text(
-            chat_id=message.chat_id,
-            msg_id=status_msg.message_id,
-            text="⚙️ در حال پردازش و تغییر متادیتا..."
-        )
-        change_metadata(mp3_path)
-
-        print("در حال ارسال به کانال...")
-        await bot.send_music(
-            chat_id=TARGET_CHANNEL_ID,
-            path=mp3_path,
-            performer=NEW_ARTIST
+            },
+            timeout=180,
         )
 
-        await bot.edit_message_text(
-            chat_id=message.chat_id,
-            msg_id=status_msg.message_id,
-            text="✅ آهنگ با موفقیت به کانال ارسال شد."
+    response.raise_for_status()
+    result = response.json()
+
+    if result.get("status") not in (None, "OK"):
+        raise RuntimeError(result)
+
+    file_id = (result.get("data") or {}).get("file_id")
+
+    if not file_id:
+        raise RuntimeError(f"file_id Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯: {result}")
+
+    return file_id
+
+
+def upload_to_rubika(path, media_type="Music"):
+    upload_url = request_upload_url(media_type)
+    return upload_file(upload_url, path)
+
+
+def send_file(chat_id, file_id, reply_to_message_id=None):
+    data = {
+        "chat_id": chat_id,
+        "file_id": file_id,
+    }
+
+    if reply_to_message_id:
+        data["reply_to_message_id"] = reply_to_message_id
+
+    return api("sendFile", data)
+
+
+# ============================================================
+# Keypad
+# ============================================================
+OWNER_KEYBOARD = {
+    "rows": [
+        [
+            {
+                "id": "owner",
+                "type": "Simple",
+                "button_text": "Ù…Ø§Ù„Ú©",
+            }
+        ]
+    ]
+}
+
+INLINE_KEYBOARD = {
+    "rows": [
+        [
+            {
+                "id": "time",
+                "type": "Simple",
+                "button_text": "ðŸ• Ø³Ø§Ø¹Øª",
+            }
+        ],
+        [
+            {
+                "id": "date",
+                "type": "Simple",
+                "button_text": "ðŸ“… ØªØ§Ø±ÛŒØ®",
+            }
+        ],
+        [
+            {
+                "id": "channel",
+                "type": "Simple",
+                "button_text": "@Black_list_remix",
+            }
+        ],
+    ]
+}
+
+
+# ============================================================
+# Download
+# ============================================================
+def download_file(file_id, filename):
+    result = get_file(file_id)
+    data = data_of(result)
+
+    download_url = data.get("download_url")
+
+    if not download_url:
+        raise RuntimeError(f"download_url Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯: {result}")
+
+    safe_name = Path(filename).name or "input_audio"
+    path = WORK_DIR / safe_name
+
+    with requests.get(
+        download_url,
+        stream=True,
+        timeout=180,
+    ) as response:
+        response.raise_for_status()
+
+        with path.open("wb") as file:
+            for chunk in response.iter_content(1024 * 256):
+                if chunk:
+                    file.write(chunk)
+
+    return path
+
+
+# ============================================================
+# FFmpeg
+# ============================================================
+def ffmpeg_convert(source_path):
+    source_path = Path(source_path)
+
+    # Ù†Ø§Ù… Ø¢Ù‡Ù†Ú¯ Ø§Ø² Ù†Ø§Ù… Ø§ØµÙ„ÛŒ ÙØ§ÛŒÙ„ Ú¯Ø±ÙØªÙ‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.
+    # Ù¾Ø³ÙˆÙ†Ø¯ Ø¬Ø¯ÛŒØ¯ MP3 Ø§Ø³ØªØŒ ÙˆÙ„ÛŒ Title Ù‡Ù…Ø§Ù† Ù†Ø§Ù… Ø§ØµÙ„ÛŒ Ø¢Ù‡Ù†Ú¯ Ù…ÛŒâ€ŒÙ…Ø§Ù†Ø¯.
+    title = source_path.stem
+
+    cover_path = WORK_DIR / "cover.jpg"
+
+    if not cover_path.exists():
+        response = requests.get(COVER_URL, timeout=60)
+        response.raise_for_status()
+        cover_path.write_bytes(response.content)
+
+    output_path = WORK_DIR / f"{source_path.stem}.mp3"
+
+    # Ø§Ú¯Ø± ÙØ§ÛŒÙ„ Ø®Ø±ÙˆØ¬ÛŒ Ù‚Ø¨Ù„ÛŒ ÙˆØ¬ÙˆØ¯ Ø¯Ø§Ø´Øª Ø­Ø°ÙØ´ Ú©Ù†.
+    if output_path.exists():
+        output_path.unlink()
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-i",
+        str(cover_path),
+
+        # ÙÙ‚Ø· ØµØ¯Ø§ÛŒ ÙˆØ±ÙˆØ¯ÛŒ
+        "-map",
+        "0:a:0",
+
+        # Ø¹Ú©Ø³ Ú©Ø§ÙˆØ±
+        "-map",
+        "1:v:0",
+
+        # ØªØ¨Ø¯ÛŒÙ„ ØµØ¯Ø§ Ø¨Ù‡ MP3
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "320k",
+
+        # Ø¹Ú©Ø³ Ø¨Ù‡ JPEG Ø¨Ø±Ø§ÛŒ ID3 cover
+        "-c:v",
+        "mjpeg",
+
+        # Ø¹Ú©Ø³ Ø¨Ù‡ Ø¹Ù†ÙˆØ§Ù† attached picture
+        "-disposition:v:0",
+        "attached_pic",
+
+        # Ù…ØªØ§Ø¯ÛŒØªØ§
+        "-metadata",
+        f"title={title}",
+        "-metadata",
+        f"artist={ARTIST}",
+        "-metadata",
+        "album=Black List Remix",
+
+        str(output_path),
+    ]
+
+    process = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=300,
+    )
+
+    if process.returncode != 0:
+        raise RuntimeError(
+            "FFmpeg error:\n" + process.stderr[-4000:]
         )
 
-        if os.path.exists(mp3_path):
-            os.remove(mp3_path)
-        if os.path.exists(local_path):
-            os.remove(local_path)
+    if not output_path.exists():
+        raise RuntimeError("ÙØ§ÛŒÙ„ MP3 Ø³Ø§Ø®ØªÙ‡ Ù†Ø´Ø¯.")
 
-    except Exception as e:
-        print(f"خطای پردازش: {e}")
+    return output_path
+
+
+# ============================================================
+# Extract update
+# ============================================================
+def extract_message(update):
+    if not isinstance(update, dict):
+        return None
+
+    if update.get("type") != "NewMessage":
+        return None
+
+    msg = update.get("new_message") or {}
+
+    chat_id = update.get("chat_id") or msg.get("chat_id")
+    message_id = msg.get("message_id") or msg.get("id")
+    text = msg.get("text") or ""
+
+    if not chat_id or not message_id:
+        return None
+
+    return (
+        chat_id,
+        message_id,
+        text,
+        msg,
+        update,
+    )
+
+
+def extract_file_info(msg):
+    file_obj = msg.get("file")
+
+    if isinstance(file_obj, dict):
+        file_id = (
+            file_obj.get("file_id")
+            or file_obj.get("id")
+        )
+
+        file_name = (
+            file_obj.get("file_name")
+            or file_obj.get("name")
+            or msg.get("file_name")
+            or "music"
+        )
+
+        if file_id:
+            return file_id, file_name
+
+    file_id = msg.get("file_id")
+
+    if file_id:
+        return (
+            file_id,
+            msg.get("file_name") or "music",
+        )
+
+    return None, None
+
+
+# ============================================================
+# Start / Help
+# ============================================================
+def send_start(chat_id, message_id):
+    text = (
+        "ðŸŽµ Ø³Ù„Ø§Ù… Ùˆ Ø®ÙˆØ´ Ø¢Ù…Ø¯ÛŒØ¯!\n\n"
+        "ÙØ§ÛŒÙ„ ØµÙˆØªÛŒ Ø®ÙˆØ¯ Ø±Ø§ Ø§Ø±Ø³Ø§Ù„ Ú©Ù†ÛŒØ¯ ØªØ§ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ùˆ Ø¯Ø± Ú©Ø§Ù†Ø§Ù„ Ø§Ø±Ø³Ø§Ù„ Ø´ÙˆØ¯.\n"
+        "ðŸ–¼ Ú©Ø§ÙˆØ± Ùˆ Ù†Ø§Ù… Ø®ÙˆØ§Ù†Ù†Ø¯Ù‡ Ø±ÙˆÛŒ ÙØ§ÛŒÙ„ ØªÙ†Ø¸ÛŒÙ… Ù…ÛŒâ€ŒØ´ÙˆØ¯."
+    )
+
+    send_message(
+        chat_id,
+        text,
+        reply_to_message_id=message_id,
+        keypad=OWNER_KEYBOARD,
+    )
+
+    send_message(
+        chat_id,
+        " ",
+        keypad=INLINE_KEYBOARD,
+    )
+
+
+def send_help(chat_id, message_id):
+    text = (
+        "ðŸ“– Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ø±Ø¨Ø§Øª\n\n"
+        "ðŸŽµ ÙØ§ÛŒÙ„ ØµÙˆØªÛŒ Ø®ÙˆØ¯ Ø±Ø§ Ø§Ø±Ø³Ø§Ù„ Ú©Ù†ÛŒØ¯.\n"
+        "ðŸ–¼ Ú©Ø§ÙˆØ± Ø§Ø®ØªØµØ§ØµÛŒ Ø±ÙˆÛŒ Ù…ÙˆØ²ÛŒÚ© Ù‚Ø±Ø§Ø± Ù…ÛŒâ€ŒÚ¯ÛŒØ±Ø¯.\n"
+        f"ðŸŽ¤ Ø®ÙˆØ§Ù†Ù†Ø¯Ù‡: {ARTIST}\n"
+        "ðŸ“¤ Ø³Ù¾Ø³ Ù…ÙˆØ²ÛŒÚ© Ø¨Ù‡ Ú©Ø§Ù†Ø§Ù„ Ø§Ø±Ø³Ø§Ù„ Ù…ÛŒâ€ŒØ´ÙˆØ¯."
+    )
+
+    send_message(
+        chat_id,
+        text,
+        reply_to_message_id=message_id,
+        keypad=OWNER_KEYBOARD,
+    )
+
+
+# ============================================================
+# Process Audio
+# ============================================================
+def process_audio(chat_id, message_id, file_id, original_name):
+    status_id = None
+    status2_id = None
+    source_path = None
+    output_path = None
+
+    try:
+        # ðŸ“¥
+        status = send_message(
+            chat_id,
+            "ðŸ“¥",
+            reply_to_message_id=message_id,
+        )
+
+        status_id = data_of(status).get("message_id")
+
+        source_path = download_file(
+            file_id,
+            original_name,
+        )
+
+        # âœï¸
+        if status_id:
+            try:
+                delete_message(
+                    chat_id,
+                    status_id,
+                )
+            except Exception:
+                pass
+
+        status2 = send_message(
+            chat_id,
+            "âœï¸",
+            reply_to_message_id=message_id,
+        )
+
+        status2_id = data_of(status2).get("message_id")
+
+        # ØªØ¨Ø¯ÛŒÙ„ + Ú©Ø§ÙˆØ± + Artist
+        output_path = ffmpeg_convert(source_path)
+
+        # Ø¢Ù¾Ù„ÙˆØ¯ Ø®Ø±ÙˆØ¬ÛŒ Ø¨Ù‡ Ø¹Ù†ÙˆØ§Ù† Music
+        music_file_id = upload_to_rubika(
+            output_path,
+            "Music",
+        )
+
+        # Ø§Ø±Ø³Ø§Ù„ Ø¨Ù‡ Ú©Ø§Ù†Ø§Ù„
+        send_file(
+            CHANNEL_ID,
+            music_file_id,
+        )
+
+        # Ø­Ø°Ù âœï¸
+        if status2_id:
+            try:
+                delete_message(
+                    chat_id,
+                    status2_id,
+                )
+            except Exception:
+                pass
+
+        # âœ…
+        send_message(
+            chat_id,
+            "âœ…",
+            reply_to_message_id=message_id,
+        )
+
+        print(
+            f"MUSIC SENT: {original_name} -> "
+            f"{output_path.name}"
+        )
+
+    except Exception as error:
+        print("AUDIO ERROR:", repr(error))
+
+        if status_id:
+            try:
+                delete_message(
+                    chat_id,
+                    status_id,
+                )
+            except Exception:
+                pass
+
+        if status2_id:
+            try:
+                delete_message(
+                    chat_id,
+                    status2_id,
+                )
+            except Exception:
+                pass
+
         try:
-            await bot.edit_message_text(
-                chat_id=message.chat_id,
-                msg_id=status_msg.message_id,
-                text=f"❌ خطا در پردازش فایل: {e}"
+            send_message(
+                chat_id,
+                "âŒ Ø¯Ø± Ù¾Ø±Ø¯Ø§Ø²Ø´ ÛŒØ§ Ø§Ø±Ø³Ø§Ù„ Ù…ÙˆØ²ÛŒÚ© Ø®Ø·Ø§ÛŒÛŒ Ø±Ø® Ø¯Ø§Ø¯.",
+                reply_to_message_id=message_id,
             )
         except Exception:
             pass
-        if os.path.exists(local_path):
-            os.remove(local_path)
+
+    finally:
+        for path in (source_path, output_path):
+            try:
+                if path and path.exists():
+                    path.unlink()
+            except Exception:
+                pass
 
 
-# ========== اجرا ==========
+# ============================================================
+# Update handler
+# ============================================================
+def handle_update(update):
+    extracted = extract_message(update)
+
+    if not extracted:
+        return
+
+    (
+        chat_id,
+        message_id,
+        text,
+        msg,
+        raw,
+    ) = extracted
+
+    if text == "/start":
+        send_start(
+            chat_id,
+            message_id,
+        )
+        return
+
+    if text == "/help":
+        send_help(
+            chat_id,
+            message_id,
+        )
+        return
+
+    if text.strip() == "Ù…Ø§Ù„Ú©":
+        send_message(
+            chat_id,
+            "Ø³Ù„Ø§Ù… Ùˆ Ø¹Ø±Ø¶ Ø§Ø¯Ø¨ Ø®Ø¯Ù…Øª Ø´Ù…Ø§ Ø¯ÙˆØ³Øª Ø¹Ø²ÛŒØ².\n"
+            "Ø¨Ø±Ø§ÛŒ Ø§Ø·Ù„Ø§Ø¹Ø§Øª Ø¨ÛŒØ´ØªØ± ÛŒØ§ Ù‡Ù…Ú©Ø§Ø±ÛŒ Ùˆ ÛŒØ§ Ø§Ù†ØªÙ‚Ø§Ø¯Ø§Øª Ø®ÙˆØ¯ Ùˆ ØªØ¨Ù„ÛŒØºØ§ØªÙ…ÛŒØªÙˆØ§Ù†ÛŒØ¯ Ø¨Ø§ Ù…Ø§Ù„Ú© ØµØ­Ø¨Øª Ú©Ù†ÛŒØ¯:\n"
+            "@reza_127_s",
+            reply_to_message_id=message_id,
+        )
+        return
+
+    file_id, filename = extract_file_info(msg)
+
+    if file_id:
+        process_audio(
+            chat_id,
+            message_id,
+            file_id,
+            filename,
+        )
+        return
+
+    if not text:
+        try:
+            send_message(
+                chat_id,
+                "Ù„Ø·ÙØ§ ÙØ§ÛŒÙ„ ØµÙˆØªÛŒ Ø¨ÙØ±Ø³ØªÛŒØ¯.",
+                reply_to_message_id=message_id,
+            )
+        except Exception:
+            pass
+
+
+# ============================================================
+# Polling
+# ============================================================
+def clear_old_updates():
+    try:
+        result = get_updates(
+            limit=UPDATE_LIMIT,
+        )
+
+        return data_of(result).get(
+            "next_offset_id"
+        )
+
+    except Exception as error:
+        print(
+            "CLEAR OLD UPDATES ERROR:",
+            repr(error),
+        )
+        return None
+
+
+def run():
+    print("=" * 50)
+    print("Rubika Music Bot - GitHub Actions")
+    print("=" * 50)
+
+    try:
+        set_commands()
+        print("âœ… /start Ùˆ /help Ø«Ø¨Øª Ø´Ø¯Ù†Ø¯.")
+    except Exception as error:
+        print(
+            "âš ï¸ setCommands error:",
+            repr(error),
+        )
+
+    print("Ø¯Ø± Ø­Ø§Ù„ Ø±Ø¯ Ú©Ø±Ø¯Ù† Ø¢Ù¾Ø¯ÛŒØªâ€ŒÙ‡Ø§ÛŒ Ù‚Ø¯ÛŒÙ…ÛŒ...")
+
+    offset_id = clear_old_updates()
+
+    print("ðŸ¤– Rubika Music Bot is running...")
+    print("âš¡ polling: 0.5 second")
+    print(f"ðŸŽ¤ Artist: {ARTIST}")
+    print("ðŸ–¼ Cover: ÙØ¹Ø§Ù„")
+    print("ðŸŽµ MP3 conversion: ÙØ¹Ø§Ù„")
+
+    while True:
+        try:
+            result = get_updates(
+                offset_id=offset_id,
+                limit=UPDATE_LIMIT,
+            )
+
+            data = data_of(result)
+
+            next_offset = data.get(
+                "next_offset_id"
+            )
+
+            if next_offset:
+                offset_id = next_offset
+
+            updates = (
+                data.get("updates")
+                or data.get("new_messages")
+                or []
+            )
+
+            for update in updates:
+                try:
+                    handle_update(update)
+                except Exception as error:
+                    print(
+                        "UPDATE ERROR:",
+                        repr(error),
+                    )
+
+            if not updates:
+                time.sleep(POLL_DELAY)
+
+        except KeyboardInterrupt:
+            print("Bot stopped.")
+            break
+
+        except Exception as error:
+            print(
+                "POLL ERROR:",
+                repr(error),
+            )
+            time.sleep(ERROR_DELAY)
+
+
 if __name__ == "__main__":
-    print("🤖 ربات در حال اجراست...")
-    ensure_welcome_photo()
-    get_cover_bytes()
-    bot.run()
+    run()
