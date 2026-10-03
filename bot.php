@@ -4,7 +4,7 @@ require_once 'vendor/autoload.php';
 use RubikaBot\Bot;
 use RubikaBot\Filters\Filters;
 
-$token = getenv('BOT_TOKEN');
+$token = getenv('CEFCFD0ECUJKKLJTVKOPNCVNBUKJBVQZVJIJUQCSYCOPCUQYHFDIEHORVRRRAXCU');
 $bot = new Bot($token);
 
 // ========== تنظیمات ==========
