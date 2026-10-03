@@ -1,4 +1,4 @@
-name: Rubika Voice Bot
+name: Rubika Uploader Bot
 
 on:
   workflow_dispatch:
@@ -16,9 +16,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -26,5 +23,3 @@ jobs:
 
       - name: Run the bot
         run: python bot.py
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
