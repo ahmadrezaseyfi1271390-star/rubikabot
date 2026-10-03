@@ -1,4 +1,4 @@
-name: Rubika Bot
+name: Rubika Voice Bot
 
 on:
   workflow_dispatch:
@@ -11,19 +11,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          php-version: '8.3'
-          extensions: mbstring, curl
+          python-version: '3.11'
 
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install Composer dependencies
-        run: composer install --no-dev --prefer-dist
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run the bot
-        run: php bot.php
+        run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
