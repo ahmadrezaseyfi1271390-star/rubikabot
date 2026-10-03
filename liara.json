@@ -1,0 +1,5 @@
+{
+    "app": "rubika-voice-bot",
+    "port": 80,
+    "platform": "docker"
+}
