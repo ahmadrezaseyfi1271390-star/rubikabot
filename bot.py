@@ -1,329 +1,276 @@
 import os
-import time
-import datetime
 import subprocess
 import requests
 import tempfile
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, APIC, TPE1, TIT2, ID3NoHeaderError
+from rubka import Robot, Message
 
 # ========== تنظیمات ==========
 BOT_TOKEN = "CEFCFD0ECUJKKLJTVKOPNCVNBUKJBVQZVJIJUQCSYCOPCUQYHFDIEHORVRRRAXCU"
 TARGET_CHANNEL_ID = "c0DI7gA0218940ebab512954822551df"
-OWNER_ID = "u0FXnfh0fece55a99ad52d509fb50335"
 OWNER_CHAT_ID = "b0FXnfh0BEu804900ee2661517d3ae60"
-NEW_ARTIST = "@Black_list_remix"
-COVER_URL = "https://cdn.imgurl.ir/uploads/s93695_ab8b9c87-0990-4beb-bfaa-cd1bf842caf7.png"
-CHANNEL_USERNAME = "@Black_list_remix"
-OWNER_USERNAME = "@reza_127_s"
-API_BASE = f"https://botapi.rubika.ir/v3/{BOT_TOKEN}"
-# ==========================
+OWNER_ID = "u0FXnfh0fece55a99ad52d509fb50335"
 
-TEMP_DIR = tempfile.mkdtemp(prefix="rubika_audio_")
-PHOTO_PATH = os.path.join(TEMP_DIR, "cover.png")
-PHOTO_BYTES = None
-PHOTO_FILE_ID = None
-PROCESSED_IDS = set()
-STARTED_USERS = set()
+API_BASE = f"https://botapi.rubika.ir/v3/{BOT_TOKEN}"
+
+TEMP_DIR = tempfile.mkdtemp(prefix="rubika_voice_")
 BANNED_USERS = set()
 
 SUPPORTED_AUDIO_EXTENSIONS = (
-    '.mp3', '.aac', '.wma', '.flac', '.ac3', '.ogg', '.m4a',
-    '.wav', '.opus', '.aiff', '.alac', '.ape', '.amr'
+    '.mp3', '.m4a', '.wav', '.aac', '.flac', '.wma', '.ogg',
+    '.opus', '.amr', '.ac3', '.aiff', '.alac', '.ape'
 )
 
+bot = Robot(token=BOT_TOKEN)
 
-def api_call(method, data=None):
+
+# ========== دریافت لینک دانلود مستقیم ==========
+def get_download_url(file_id):
     try:
-        resp = requests.post(f"{API_BASE}/{method}", json=data or {}, timeout=30)
-        return resp.json()
+        resp = requests.post(
+            f"{API_BASE}/getFile",
+            json={"file_id": file_id},
+            timeout=30
+        )
+        data = resp.json()
+        if data.get("status") == "OK":
+            d = data.get("data", {})
+            return d.get("download_url") or d.get("file_url") or d.get("url")
     except Exception as e:
-        print(f"❌ خطا در {method}: {e}")
-        return {}
-
-
-def load_photo_once():
-    global PHOTO_BYTES
-    if PHOTO_BYTES is not None:
-        return PHOTO_BYTES
-    try:
-        resp = requests.get(COVER_URL, timeout=30)
-        resp.raise_for_status()
-        PHOTO_BYTES = resp.content
-        with open(PHOTO_PATH, "wb") as f:
-            f.write(PHOTO_BYTES)
-        print("✅ عکس دانلود شد")
-        return PHOTO_BYTES
-    except Exception as e:
-        print(f"❌ خطا در دانلود عکس: {e}")
-        return None
-
-
-def upload_photo_once():
-    global PHOTO_FILE_ID
-    if PHOTO_FILE_ID:
-        return PHOTO_FILE_ID
-    if not os.path.exists(PHOTO_PATH):
-        return None
-    try:
-        req = api_call("requestSendFile", {"type": "Image"})
-        upload_url = req.get("data", {}).get("upload_url")
-        if not upload_url:
-            return None
-        with open(PHOTO_PATH, "rb") as f:
-            files = {"file": ("cover.png", f, "image/png")}
-            up = requests.post(upload_url, files=files, timeout=60)
-        file_id = up.json().get("data", {}).get("file_id")
-        if file_id:
-            PHOTO_FILE_ID = file_id
-            print("✅ عکس آپلود شد")
-        return file_id
-    except Exception as e:
-        print(f"❌ خطا در آپلود عکس: {e}")
-        return None
-
-
-def extract_file_info(msg):
-    file_inline = msg.get("file_inline")
-    if file_inline:
-        return {
-            "file_id": file_inline.get("file_id"),
-            "file_name": file_inline.get("file_name") or file_inline.get("name") or "",
-            "mime": file_inline.get("mime") or "",
-        }
-    file_data = msg.get("file")
-    if file_data:
-        return {
-            "file_id": file_data.get("file_id"),
-            "file_name": file_data.get("file_name") or file_data.get("name") or "",
-            "mime": file_data.get("mime") or "",
-        }
+        print(f"❌ خطا در get_download_url: {e}")
     return None
 
 
-def is_audio_file(file_info):
-    if not file_info:
+def get_file_attr(file_obj, name, default=None):
+    return getattr(file_obj, name, default)
+
+
+def is_audio_file(message: Message):
+    if not hasattr(message, 'file') or not message.file:
         return False
-    name = (file_info.get("file_name") or "").lower()
-    mime = (file_info.get("mime") or "").lower()
-    if name.endswith(SUPPORTED_AUDIO_EXTENSIONS):
-        return True
-    if "audio" in mime or "music" in mime:
-        return True
-    return False
+    file_obj = message.file
+    name = (get_file_attr(file_obj, 'file_name', default='') or '').lower()
+    return any(name.endswith(ext) for ext in SUPPORTED_AUDIO_EXTENSIONS)
 
 
-def convert_to_mp3(input_path):
-    output_path = os.path.splitext(input_path)[0] + "_converted.mp3"
+def is_private_chat(message: Message):
+    raw = getattr(message, "raw_data", None) or {}
+    return raw.get("sender_type", "") == "User"
+
+
+# ========== تبدیل به ویس (OGG/Opus) ==========
+def convert_to_voice(input_path):
+    output_path = os.path.splitext(input_path)[0] + "_voice.ogg"
+
+    if not os.path.exists(input_path):
+        print(f"❌ فایل ورودی وجود ندارد: {input_path}")
+        return None
+
+    print(f"📁 فایل ورودی: {input_path} | حجم: {os.path.getsize(input_path)} بایت")
+
     try:
-        import imageio_ffmpeg
-        ffmpeg_cmd = imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        ffmpeg_cmd = "ffmpeg"
-    try:
-        subprocess.run([
-            ffmpeg_cmd, "-i", input_path,
-            "-acodec", "libmp3lame", "-ab", "128k",
-            "-vn", "-y", "-loglevel", "error",
+        result = subprocess.run([
+            "ffmpeg", "-i", input_path,
+            "-ac", "1",
+            "-map", "0:a",
+            "-codec:a", "libopus",
+            "-b:a", "48k",
+            "-vbr", "on",
+            "-application", "voip",
+            "-y", "-loglevel", "error",
             output_path
         ], check=True, capture_output=True, timeout=180)
+
         if os.path.exists(output_path):
+            print(f"✅ تبدیل موفق | حجم خروجی: {os.path.getsize(output_path)} بایت")
             return output_path
+        else:
+            print(f"❌ فایل خروجی ساخته نشد")
+            return None
+
+    except FileNotFoundError:
+        print("❌ ffmpeg نصب نیست. با دستور apt-get install ffmpeg نصبش کن")
+        return None
+    except subprocess.CalledProcessError as e:
+        print(f"❌ خطای ffmpeg:")
+        print(f"   {e.stderr.decode('utf-8', errors='ignore')}")
         return None
     except Exception as e:
-        print(f"❌ خطا در تبدیل: {e}")
+        print(f"❌ خطا در تبدیل: {type(e).__name__}: {e}")
         return None
 
 
-def change_metadata(file_path):
+# ========== آپلود و ارسال به کانال ==========
+async def upload_voice_and_send(file_path, chat_id):
     try:
-        try:
-            audio = MP3(file_path, ID3=ID3)
-        except ID3NoHeaderError:
-            audio = MP3(file_path)
-            audio.add_tags()
-        if audio.tags is None:
-            audio.add_tags()
-        audio.tags.add(TPE1(encoding=3, text=NEW_ARTIST))
-        title_tag = audio.tags.get("TIT2")
-        if title_tag and "@" in str(title_tag):
-            audio.tags.add(TIT2(encoding=3, text=NEW_ARTIST))
-        if PHOTO_BYTES:
-            audio.tags.delall("APIC")
-            audio.tags.add(APIC(
-                encoding=3, mime="image/png",
-                type=3, desc="Cover", data=PHOTO_BYTES
-            ))
-        audio.save(v2_version=3)
-        return True
-    except Exception as e:
-        print(f"خطا در متادیتا: {e}")
-        return False
+        result = await bot.get_upload_url("Voice")
+        print(f"📥 get_upload_url(Voice): {result}")
 
+        upload_url = None
+        if isinstance(result, dict):
+            upload_url = (
+                result.get("data", {}).get("upload_url")
+                or result.get("upload_url")
+                or result.get("url")
+            )
+        elif isinstance(result, str):
+            upload_url = result
 
-def upload_and_send(file_path, chat_id):
-    try:
-        req = api_call("requestSendFile", {"type": "Music"})
-        upload_url = req.get("data", {}).get("upload_url")
         if not upload_url:
-            print("❌ upload_url نگرفت")
+            print(f"❌ upload_url نگرفت: {result}")
             return False
+
         with open(file_path, "rb") as f:
-            files = {"file": (os.path.basename(file_path), f, "audio/mpeg")}
+            files = {"file": (os.path.basename(file_path), f, "audio/ogg")}
             up_resp = requests.post(upload_url, files=files, timeout=180)
-        file_id = up_resp.json().get("data", {}).get("file_id")
+
+        up_result = up_resp.json()
+        print(f"📥 upload response: {up_result}")
+
+        file_id = (
+            up_result.get("data", {}).get("file_id")
+            or up_result.get("file_id")
+        )
         if not file_id:
-            print(f"❌ file_id نگرفت: {up_resp.text[:200]}")
+            print(f"❌ file_id نگرفت")
             return False
-        send_resp = api_call("sendFile", {
-            "chat_id": chat_id,
-            "file_id": file_id,
-            "type": "Music"
-        })
-        print(f"📤 sendFile: {send_resp}")
+
+        try:
+            send_resp = await bot.send_voice(chat_id=chat_id, file_id=file_id)
+        except AttributeError:
+            send_resp = await bot.send_file(chat_id=chat_id, file_id=file_id, type="Voice")
+
+        print(f"📤 send_voice: {send_resp}")
         return send_resp.get("status") == "OK"
     except Exception as e:
-        print(f"❌ خطا در upload_and_send: {e}")
+        print(f"❌ خطا در upload_voice_and_send: {e}")
         return False
 
 
-def owner_send(text):
-    return api_call("sendMessage", {
-        "chat_id": OWNER_CHAT_ID,
-        "text": text
-    })
-
-
-def handle_ban(text):
-    if "=" not in text:
-        return False
-    parts = text.split("=", 1)
-    if len(parts) != 2:
-        return False
-    user_id = parts[0].strip()
-    action = parts[1].strip()
-    if action == "بن":
-        BANNED_USERS.add(user_id)
-        owner_send(f"✅ کاربر {user_id} مسدود شد.")
-        return True
-    elif action == "رفع":
-        BANNED_USERS.discard(user_id)
-        owner_send(f"✅ کاربر {user_id} رفع مسدودی شد.")
-        return True
-    return False
-
-
-def handle_start(chat_id, message_id):
-    welcome_text = (
-        "سلام و درود👋\n"
-        "برای ارسال آهنگ شما به کانال باید  فایل آهنگ رو فقط به صورت mp3 ارسال کنید."
+# ========== /start ==========
+@bot.on_message(commands=["start"])
+async def start_handler(bot: Robot, message: Message):
+    if not is_private_chat(message):
+        return
+    await bot.send_message(
+        chat_id=message.chat_id,
+        text="لطفا آهنگ خود را ارسال کنید📥"
     )
 
-    chat_keypad = {
-        "rows": [
-            {"buttons": [{"id": "contact_owner_btn", "type": "Simple",
-                          "button_text": "📞 ارتباط با مالک"}]}
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": False
-    }
 
-    if PHOTO_FILE_ID:
-        result = api_call("sendFile", {
-            "chat_id": chat_id,
-            "file_id": PHOTO_FILE_ID,
-            "type": "Image",
-            "text": welcome_text,
-            "chat_keypad_type": "New",
-            "chat_keypad": chat_keypad,
-        })
-        print(f"📤 sendFile(start): {result}")
-        if result.get("status") != "OK":
-            r2 = api_call("sendFile", {
-                "chat_id": chat_id,
-                "file_id": PHOTO_FILE_ID,
-                "type": "Image",
-                "text": welcome_text,
-            })
-            r3 = api_call("sendMessage", {
-                "chat_id": chat_id,
-                "text": "👇",
-                "chat_keypad_type": "New",
-                "chat_keypad": chat_keypad,
-            })
-            print(f"📤 fallback: {r2} | {r3}")
+# ========== هندلر اصلی ==========
+@bot.on_message()
+async def main_handler(bot: Robot, message: Message):
+    sender_id = message.sender_id or ""
+    chat_id = message.chat_id or ""
+    text = (message.text or "").strip()
+
+    # دستور 0
+    if text == "0":
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"🆔 chat_id: {chat_id}\n"
+                f"🆔 sender_id: {sender_id}\n"
+                f"📁 sender_type: {(message.raw_data or {}).get('sender_type')}"
+            )
+        )
         return
 
-    result = api_call("sendMessage", {
-        "chat_id": chat_id,
-        "text": welcome_text,
-        "chat_keypad_type": "New",
-        "chat_keypad": chat_keypad,
-    })
-    print(f"📤 sendMessage(start): {result}")
+    if not is_private_chat(message):
+        return
+
+    if sender_id in BANNED_USERS:
+        return
+
+    # دستورات مالک
+    if sender_id == OWNER_ID and "=" in text:
+        parts = text.split("=", 1)
+        if len(parts) == 2:
+            user_id, action = parts[0].strip(), parts[1].strip()
+            if action == "بن":
+                BANNED_USERS.add(user_id)
+                await bot.send_message(OWNER_CHAT_ID, f"✅ کاربر {user_id} مسدود شد.")
+                return
+            elif action == "رفع":
+                BANNED_USERS.discard(user_id)
+                await bot.send_message(OWNER_CHAT_ID, f"✅ کاربر {user_id} رفع مسدودی شد.")
+                return
+
+    if not hasattr(message, 'file') or not message.file:
+        return
+
+    if not is_audio_file(message):
+        await bot.send_message(chat_id=chat_id, text="لطفا فقط آهنگ بفرستید.")
+        return
+
+    file_obj = message.file
+    file_name = get_file_attr(file_obj, 'file_name', default='') or f"audio_{message.message_id}.mp3"
+    file_id = get_file_attr(file_obj, 'file_id', default=None)
+
+    if not file_id:
+        await bot.send_message(chat_id=chat_id, text="❌ خطا در شناسایی فایل")
+        return
+
+    # فوروارد به ادمین
+    try:
+        await bot.forward_message(
+            from_chat_id=chat_id,
+            message_id=message.message_id,
+            to_chat_id=OWNER_CHAT_ID
+        )
+    except Exception as e:
+        print(f"⚠️ خطا در فوروارد: {e}")
+
+    # اطلاعات کاربر
+    info_text = (
+        f"🆔 chat_id: {chat_id}\n"
+        f"🆔 sender_id: {sender_id}\n"
+        f"📛 نام فایل: {file_name}"
+    )
+    await bot.send_message(chat_id=OWNER_CHAT_ID, text=info_text)
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="درحال دانلود و ارسال آهنگ به کانال."
+    )
+
+    await process_audio(bot, message, file_id, file_name, TARGET_CHANNEL_ID)
 
 
-def handle_audio(chat_id, message_id, file_info):
-    file_name = file_info.get("file_name") or f"audio_{message_id}.mp3"
-    file_id = file_info.get("file_id")
-    local_path = os.path.join(TEMP_DIR, file_name)
-    mp3_path = local_path
-
-    status = api_call("sendMessage", {
-        "chat_id": chat_id,
-        "text": "⬇️ در حال دانلود فایل...",
-        "reply_to_message_id": message_id
-    })
-    status_id = status.get("data", {}).get("message_id")
-
-    def edit_status(text):
-        if status_id:
-            api_call("editMessageText", {
-                "chat_id": chat_id,
-                "message_id": status_id,
-                "text": text
-            })
+# ========== پردازش ==========
+async def process_audio(bot: Robot, message: Message, file_id: str, file_name: str, target_channel: str):
+    chat_id = message.chat_id
+    input_path = os.path.join(TEMP_DIR, file_name)
+    voice_path = None
 
     try:
-        file_data = api_call("getFile", {"file_id": file_id})
-        download_url = (file_data.get("data", {}).get("download_url")
-                        or file_data.get("data", {}).get("file_url")
-                        or file_data.get("data", {}).get("url"))
+        download_url = get_download_url(file_id)
         if not download_url:
-            edit_status("❌ خطا در دریافت لینک فایل")
+            await bot.send_message(chat_id, "❌ خطا در دریافت لینک فایل")
             return
 
         r = requests.get(download_url, timeout=180)
-        with open(local_path, "wb") as f:
+        with open(input_path, "wb") as f:
             f.write(r.content)
 
-        ext = os.path.splitext(file_name)[1].lower()
-        if ext != '.mp3':
-            edit_status("⚙️ در حال تبدیل فرمت به MP3...")
-            converted = convert_to_mp3(local_path)
-            if converted:
-                mp3_path = converted
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-            else:
-                edit_status("❌ خطا در تبدیل فرمت")
-                return
+        print(f"✅ دانلود موفق: {len(r.content)} بایت")
 
-        edit_status("⚙️ در حال پردازش و تغییر متادیتا...")
-        change_metadata(mp3_path)
+        voice_path = convert_to_voice(input_path)
+        if not voice_path:
+            await bot.send_message(chat_id, "❌ خطا در تبدیل به ویس")
+            return
 
-        success = upload_and_send(mp3_path, TARGET_CHANNEL_ID)
-
+        success = await upload_voice_and_send(voice_path, target_channel)
         if success:
-            edit_status("✅ آهنگ با موفقیت به کانال ارسال شد.")
+            await bot.send_message(chat_id, "✅ آهنگ به صورت ویس به کانال ارسال شد.")
         else:
-            edit_status("❌ خطا در ارسال به کانال")
+            await bot.send_message(chat_id, "❌ خطا در ارسال به کانال")
 
     except Exception as e:
         print(f"❌ خطای پردازش: {e}")
-        edit_status(f"❌ خطا: {e}")
+        await bot.send_message(chat_id, f"❌ خطا: {e}")
     finally:
-        for p in [mp3_path, local_path]:
+        for p in [input_path, voice_path]:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
@@ -331,142 +278,7 @@ def handle_audio(chat_id, message_id, file_info):
                     pass
 
 
-def main_loop():
-    offset_id = None
-    print("🤖 ربات در حال اجراست...")
-
-    while True:
-        try:
-            data = {"limit": 50}
-            if offset_id:
-                data["offset_id"] = offset_id
-
-            resp = api_call("getUpdates", data)
-            if resp.get("status") != "OK":
-                time.sleep(0.3)
-                continue
-
-            updates = resp.get("data", {}).get("updates", [])
-            new_offset = resp.get("data", {}).get("next_offset_id")
-            if new_offset:
-                offset_id = new_offset
-
-            now = time.time()
-
-            for upd in updates:
-                if upd.get("type") != "NewMessage":
-                    continue
-
-                msg = upd.get("new_message", {})
-                chat_id = upd.get("chat_id")
-                message_id = msg.get("message_id")
-                text = (msg.get("text") or "").strip()
-                sender_type = msg.get("sender_type", "")
-                sender_id = msg.get("sender_id", "")
-
-                try:
-                    msg_time = float(msg.get("time", 0))
-                except (ValueError, TypeError):
-                    msg_time = 0
-
-                if msg_time > 1e12:
-                    msg_time = msg_time / 1000
-
-                if msg_time and (now - msg_time) > 3:
-                    continue
-
-                if sender_type != "User":
-                    continue
-
-                if message_id in PROCESSED_IDS:
-                    continue
-                PROCESSED_IDS.add(message_id)
-
-                file_info = extract_file_info(msg)
-
-                print(f"📩 پیام | chat_id={chat_id} | sender_id={sender_id} | text={text!r} | file={bool(file_info)}")
-
-                # ===== کاربر بن‌شده — فقط با sender_id =====
-                if sender_id in BANNED_USERS:
-                    print(f"🚫 کاربر بن‌شده | sender_id={sender_id}")
-                    continue
-
-                # ===== دستور بن/رفع (فقط مالک) =====
-                if sender_id == OWNER_ID and "=" in text:
-                    if handle_ban(text):
-                        continue
-
-                # دستور 0
-                if text == "0":
-                    api_call("sendMessage", {
-                        "chat_id": chat_id,
-                        "text": f"🆔 chat_id: {chat_id}\n🆔 sender_id: {sender_id}"
-                    })
-                    continue
-
-                # /start
-                if text == "/start":
-                    if chat_id in STARTED_USERS:
-                        continue
-                    STARTED_USERS.add(chat_id)
-                    handle_start(chat_id, message_id)
-                    continue
-
-                # دکمه ارتباط با مالک
-                if text == "📞 ارتباط با مالک":
-                    api_call("sendMessage", {
-                        "chat_id": chat_id,
-                        "text": (
-                            "سلام دوست من.\n"
-                            "برای دریافت اطلاعات بیشتر همینطور همکاری و تبلیغات "
-                            "میتونی به مالک پیام بدی.\n"
-                            "توجه داشته باش که تبلیغات هم در ربات و هم در کانال گذاشته میشود.\n"
-                            f"{OWNER_USERNAME}"
-                        ),
-                        "reply_to_message_id": message_id
-                    })
-                    continue
-
-                # آهنگ
-                if file_info and is_audio_file(file_info):
-                    owner_send(
-                        f"🎵 آهنگ جدید\n"
-                        f"👤 chat_id: {chat_id}\n"
-                        f"🆔 sender_id: {sender_id}\n"
-                        f"📛 نام فایل: {file_info.get('file_name', '?')}"
-                    )
-                    fwd = api_call("forwardMessage", {
-                        "from_chat_id": chat_id,
-                        "message_id": message_id,
-                        "to_chat_id": OWNER_CHAT_ID
-                    })
-                    print(f"📨 forward: {fwd}")
-                    handle_audio(chat_id, message_id, file_info)
-                    continue
-
-                # فایل غیرصوتی
-                if file_info:
-                    api_call("sendMessage", {
-                        "chat_id": chat_id,
-                        "text": (
-                            "دوست گرامی.\n"
-                            "این ربات فقط برای ارسال موزیک و آهنگ میباشد "
-                            "لطفا فایل های mp3 ، ogg ،... بفرستید."
-                        ),
-                        "reply_to_message_id": message_id
-                    })
-
-        except KeyboardInterrupt:
-            print("🛑 متوقف شد")
-            break
-        except Exception as e:
-            print(f"❌ خطای حلقه: {e}")
-            time.sleep(0.5)
-
-        time.sleep(0.3)
-
-
+# ========== اجرا ==========
 if __name__ == "__main__":
-    load_photo_once()
-    upload_photo_once()
-    main_loop()
+    print("🤖 ربات در حال اجراست...")
+    bot.run()
