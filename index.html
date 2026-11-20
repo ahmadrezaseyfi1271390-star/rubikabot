@@ -1,36 +1,125 @@
 <!DOCTYPE html>
-<html lang="fa">
+<html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<title>Messages</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مدیریت اعلان‌ها</title>
 <style>
-  body { font-family: sans-serif; direction: rtl; padding: 20px; }
-  .message { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
-  .message h3 { margin: 0 0 6px; }
-  .message p { margin: 0 0 8px; }
-  .message a { color: #0066cc; }
-  .message small { color: #888; }
+:root { --ac:#2563eb; --bg:#f4f7fb; --ink:#111827; --mut:#6b7280; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.7 Tahoma,sans-serif; }
+main { max-width:720px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+h1 { font-size:20px; margin:6px 0 0; }
+.card { background:#fff; border-radius:18px; padding:16px; box-shadow:0 2px 12px rgba(15,23,42,.08); display:flex; flex-direction:column; gap:10px; }
+label { font-size:13px; color:var(--mut); }
+input, textarea { width:100%; border:2px solid #e2e8f0; border-radius:12px; padding:10px 12px; font:inherit; background:#fff; color:var(--ink); }
+input:focus, textarea:focus { outline:none; border-color:var(--ac); }
+textarea { min-height:90px; resize:vertical; }
+.row { display:flex; gap:8px; flex-wrap:wrap; }
+.row > * { flex:1; }
+button { border:none; border-radius:12px; padding:10px 14px; font:700 14px Tahoma,sans-serif; cursor:pointer; background:var(--ac); color:#fff; }
+button.sec { background:#eef1f5; color:var(--ink); }
+button.del { background:#fee2e2; color:#b91c1c; }
+button:active { transform:scale(.97); }
+.item { background:#f3f5f8; border-radius:14px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
+.item b { font-size:14px; }
+.item small { color:var(--mut); direction:ltr; text-align:right; }
+.item .row button { padding:7px 10px; font-size:12px; }
+pre { background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px; overflow:auto; max-height:260px; direction:ltr; text-align:left; font:12px/1.6 monospace; margin:0; }
+.note { font-size:13px; color:var(--mut); }
 </style>
 </head>
 <body>
-<div id="app"></div>
-<script>
-  const messages = [
-    { "id": "1", "title": "تیتر پیام", "text": "متن پیام", "link": "https://example.com", "date": "1405/08/30" }
-  ];
+<main>
+<h1>مدیریت اعلان‌ها</h1>
 
-  const container = document.getElementById('app');
-  messages.forEach(m => {
-    const div = document.createElement('div');
-    div.className = 'message';
-    div.innerHTML = `
-      <h3>${m.title}</h3>
-      <p>${m.text}</p>
-      <a href="${m.link}" target="_blank" rel="noopener">${m.link}</a><br>
-      <small>${m.date}</small>
-    `;
-    container.appendChild(div);
+<div class="card">
+  <label>تیتر</label><input id="f-title" placeholder="تیتر پیام">
+  <label>متن پیام</label><textarea id="f-text" placeholder="متن پیام"></textarea>
+  <label>لینک (اختیاری، با https شروع شود)</label><input id="f-link" dir="ltr" placeholder="https://example.com">
+  <label>کد اعلان (هر کد فقط یک‌بار به کاربر نشان داده می‌شود)</label>
+  <div class="row"><input id="f-id" dir="ltr"><button class="sec" id="b-newid" type="button">کد جدید</button></div>
+  <div class="row"><button id="b-save" type="button">افزودن به فهرست</button><button class="sec" id="b-clear" type="button">پاک کردن فرم</button></div>
+  <div class="note" id="f-note"></div>
+</div>
+
+<div class="card">
+  <b>فهرست اعلان‌ها</b>
+  <div id="list" style="display:flex;flex-direction:column;gap:8px"></div>
+  <div class="note">برای نشان دادن دوباره‌ی یک اعلان به همه، روی «کد جدید» همان اعلان بزن. تا وقتی کد عوض نشود، هر کاربر آن را فقط یک‌بار می‌بیند.</div>
+</div>
+
+<div class="card">
+  <b>فایل notifications.json</b>
+  <pre id="out"></pre>
+  <div class="row">
+    <button id="b-copy" type="button">کپی</button>
+    <button class="sec" id="b-dl" type="button">دانلود فایل</button>
+    <button class="sec" id="b-repo" type="button">باز کردن مخزن</button>
+  </div>
+  <div class="note">فایل را در ریشه‌ی همین مخزن با نام <span dir="ltr">notifications.json</span> جایگزین کن و Commit بزن. بعد از حدود یک دقیقه برنامه آن را می‌خواند.</div>
+</div>
+</main>
+
+<script>
+(function () {
+  var REPO_URL = 'https://github.com/ahmadrezaseyfi1271390-star/rubikabot';
+  var $ = function (id) { return document.getElementById(id); };
+  var items = [], editing = -1;
+  try { items = JSON.parse(localStorage.getItem('nt_admin_items') || '[]'); } catch (e) {}
+
+  function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+  function save() { try { localStorage.setItem('nt_admin_items', JSON.stringify(items)); } catch (e) {} render(); }
+  function today() { try { return new Date().toLocaleDateString('fa-IR'); } catch (e) { return ''; } }
+  function clearForm() { $('f-title').value = ''; $('f-text').value = ''; $('f-link').value = ''; $('f-id').value = newId(); editing = -1; $('b-save').textContent = 'افزودن به فهرست'; $('f-note').textContent = ''; }
+
+  function render() {
+    var list = $('list'); list.textContent = '';
+    if (!items.length) { var e = document.createElement('div'); e.className = 'note'; e.textContent = 'هنوز اعلانی نساخته‌ای'; list.appendChild(e); }
+    items.forEach(function (it, i) {
+      var d = document.createElement('div'); d.className = 'item';
+      var b = document.createElement('b'); b.textContent = it.title; d.appendChild(b);
+      var s = document.createElement('small'); s.textContent = 'کد: ' + it.id; d.appendChild(s);
+      var r = document.createElement('div'); r.className = 'row';
+      function btn(t, cls, fn) { var x = document.createElement('button'); x.type = 'button'; x.textContent = t; if (cls) x.className = cls; x.addEventListener('click', fn); r.appendChild(x); }
+      btn('ویرایش', 'sec', function () { editing = i; $('f-title').value = it.title; $('f-text').value = it.text || ''; $('f-link').value = it.link || ''; $('f-id').value = it.id; $('b-save').textContent = 'ذخیره‌ی تغییرات'; window.scrollTo(0, 0); });
+      btn('کد جدید (نمایش دوباره)', 'sec', function () { it.id = newId(); it.date = today(); save(); });
+      btn('حذف', 'del', function () { items.splice(i, 1); save(); });
+      d.appendChild(r); list.appendChild(d);
+    });
+    $('out').textContent = JSON.stringify(items, null, 2);
+  }
+
+  $('b-newid').addEventListener('click', function () { $('f-id').value = newId(); });
+  $('b-clear').addEventListener('click', clearForm);
+  $('b-save').addEventListener('click', function () {
+    var title = $('f-title').value.trim(), link = $('f-link').value.trim(), id = $('f-id').value.trim();
+    if (!title) { $('f-note').textContent = 'تیتر را بنویس'; return; }
+    if (link && !/^https:\/\//i.test(link)) { $('f-note').textContent = 'لینک باید با https:// شروع شود'; return; }
+    if (!id) id = newId();
+    var dup = items.some(function (x, i) { return x.id === id && i !== editing; });
+    if (dup) { $('f-note').textContent = 'این کد قبلاً استفاده شده؛ کد جدید بگیر'; return; }
+    var it = { id: id, title: title, text: $('f-text').value.trim(), link: link, date: today() };
+    if (editing >= 0) items[editing] = it; else items.unshift(it);
+    save(); clearForm();
   });
+  $('b-copy').addEventListener('click', function () {
+    var t = $('out').textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(function () { $('b-copy').textContent = 'کپی شد'; setTimeout(function () { $('b-copy').textContent = 'کپی'; }, 1500); });
+  });
+  $('b-dl').addEventListener('click', function () {
+    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('out').textContent], { type: 'application/json' })); a.download = 'notifications.json'; a.click();
+  });
+  $('b-repo').addEventListener('click', function () { window.open(REPO_URL, '_blank', 'noopener'); });
+
+  // اگر فایل فعلی روی سایت هست و فهرست محلی خالی است، از آن شروع کن
+  if (!items.length) {
+    fetch('notifications.json?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : []; }).then(function (d) {
+      if (Array.isArray(d) && d.length) { items = d; save(); }
+    }).catch(function () {});
+  }
+  clearForm(); render();
+})();
 </script>
 </body>
 </html>
